@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xyb"
+version = "0.1.0"
+description = "xiaoyibao CLI migrated from graphify shape"
+requires-python = ">=3.11"
+
+[project.scripts]
+xyb = "xyb.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+include = ["xyb*"]
