@@ -15,6 +15,7 @@ Current version includes migrated core pipeline plus medical-record workflow enh
 - `scan`: recursive directory scan + classification summary
 - `extract`: structured node/edge extraction
 - `process`: primary medical-first pipeline (includes DICOM metadata)
+- `full-update`: one-shot `process + markers-trend`
 - `graph-report`: graph + report from extraction JSON
 - `query/path/explain`: graph query, shortest path, node explain
 - `update`: incremental scan
@@ -88,6 +89,7 @@ xyb update <path>
 xyb watch <path>
 xyb backfill-merge ./graphify-out
 xyb markers-trend --graph ./xiaoyibao-out/graph.json --output-dir ./xiaoyibao-out
+xyb full-update <path> --output-dir ./xiaoyibao-out
 ```
 
 ### Query / service

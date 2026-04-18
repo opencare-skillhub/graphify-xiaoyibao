@@ -188,6 +188,27 @@ def test_add_command_invokes_ingest_and_prints_saved_path(monkeypatch: pytest.Mo
     assert 'Saved to' in out
 
 
+def test_full_update_command_runs_process_and_markers(monkeypatch: pytest.MonkeyPatch, capsys, tmp_path) -> None:
+    called = {}
+
+    def fake_process(path, output_dir, follow_symlinks=False):
+        called['process'] = (str(path), str(output_dir), follow_symlinks)
+        return {'nodes': 1, 'edges': 0}
+
+    def fake_markers(graph_path, output_dir, markers=None):
+        called['markers'] = (str(graph_path), str(output_dir), len(markers or []))
+        return {'csv': 'ok.csv'}
+
+    monkeypatch.setattr(cli, 'process_path', fake_process, raising=False)
+    monkeypatch.setattr(cli, 'generate_markers_trend', fake_markers, raising=False)
+    monkeypatch.setattr(sys, 'argv', ['xyb', 'full-update', str(tmp_path), '--output-dir', str(tmp_path / 'out')])
+    cli.main()
+    out = capsys.readouterr().out
+    assert 'markers_trend' in out
+    assert 'process' in called
+    assert 'markers' in called
+
+
 def test_path_command_prints_shortest_path(tmp_path) -> None:
     graph_path = tmp_path / 'graph.json'
     graph_path.write_text(json.dumps({

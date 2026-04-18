@@ -13,7 +13,7 @@ def test_classify_medical_files(tmp_path: Path) -> None:
 
 def test_detect_supports_medical_assets(tmp_path: Path) -> None:
     assert classify_file(tmp_path / 'scan.heic').value == 'image'
-    assert classify_file(tmp_path / 'study.dcm').value == 'document'
+    assert classify_file(tmp_path / 'study.dcm').value == 'dicom'
 
 
 def test_detect_reports_medical_directory_hits(tmp_path: Path) -> None:

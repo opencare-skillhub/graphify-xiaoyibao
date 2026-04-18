@@ -15,6 +15,7 @@
 - `scan`：递归扫描目录并分类统计
 - `extract`：抽取节点/边结构化结果
 - `process`：主线一键处理（medical-first，含 DICOM 元数据）
+- `full-update`：一键 `process + markers-trend`
 - `graph-report`：从 extraction 生成图谱与报告
 - `query/path/explain`：图谱查询、最短路径、节点解释
 - `update`：增量扫描
@@ -88,6 +89,7 @@ xyb update <path>
 xyb watch <path>
 xyb backfill-merge ./graphify-out
 xyb markers-trend --graph ./xiaoyibao-out/graph.json --output-dir ./xiaoyibao-out
+xyb full-update <path> --output-dir ./xiaoyibao-out
 ```
 
 ### 查询/服务

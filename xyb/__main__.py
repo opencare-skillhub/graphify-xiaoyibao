@@ -84,6 +84,16 @@ def build_parser() -> argparse.ArgumentParser:
     process_parser.add_argument('--follow-symlinks', action='store_true', help='follow symlinks while scanning')
     process_parser.add_argument('--output-dir', default='xiaoyibao-out', help='directory to write graph/report artifacts')
 
+    full_parser = subparsers.add_parser('full-update', help='run process then markers-trend in one command')
+    full_parser.add_argument('path', help='directory to process')
+    full_parser.add_argument('--follow-symlinks', action='store_true', help='follow symlinks while scanning')
+    full_parser.add_argument('--output-dir', default='xiaoyibao-out', help='directory to write graph/report/trend artifacts')
+    full_parser.add_argument(
+        '--markers',
+        default=",".join(m.key for m in MARKERS),
+        help='comma-separated marker keys, e.g. ca19_9,cea,afp,ca50,ca72_4,ca125',
+    )
+
     marker_parser = subparsers.add_parser('markers-trend', help='build tumor marker trend csv/png/summary from graph.json')
     marker_parser.add_argument('--graph', default='xiaoyibao-out/graph.json', help='graph json path')
     marker_parser.add_argument('--output-dir', default='xiaoyibao-out', help='output directory for trend artifacts')
@@ -296,6 +306,25 @@ def main() -> None:
             follow_symlinks=args.follow_symlinks,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == 'full-update':
+        process_result = process_path(
+            Path(args.path),
+            output_dir=Path(args.output_dir),
+            follow_symlinks=args.follow_symlinks,
+        )
+        wanted = {s.strip().lower() for s in args.markers.split(',') if s.strip()}
+        selected = [m for m in MARKERS if m.key in wanted] if wanted else MARKERS
+        trend_result = generate_markers_trend(
+            graph_path=Path(args.output_dir) / 'graph.json',
+            output_dir=Path(args.output_dir),
+            markers=selected,
+        )
+        print(json.dumps({
+            "process": process_result,
+            "markers_trend": trend_result,
+        }, ensure_ascii=False, indent=2))
         return
 
     if args.command == 'markers-trend':
