@@ -35,7 +35,7 @@ def resolve_backend(requested: str = "auto") -> str:
     for candidate in ("paddle", "mineru", "tesseract"):
         if not backend_available(candidate):
             continue
-        if candidate in {"paddle", "mineru"}:
+        if candidate == "mineru":
             continue
         return candidate
     return "none"
@@ -43,11 +43,42 @@ def resolve_backend(requested: str = "auto") -> str:
 
 def read_image_text(path: Path, *, backend: str = "auto") -> str:
     selected = resolve_backend(backend)
+    if selected == "paddle":
+        return _read_image_text_paddle(path)
     if selected == "tesseract":
         return _read_image_text_tesseract(path)
     if selected == "none":
         return ""
     raise RuntimeError(f"OCR backend '{selected}' is not implemented yet in xyb")
+
+
+def _read_image_text_paddle(path: Path) -> str:
+    try:
+        from paddleocr import PaddleOCR  # type: ignore
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError("PaddleOCR is not installed or failed to import") from exc
+
+    try:
+        ocr = PaddleOCR(use_angle_cls=True, lang="ch")
+        result = ocr.ocr(str(path), cls=True)
+    except Exception:
+        return ""
+
+    lines: list[str] = []
+    for page in result or []:
+        if not page:
+            continue
+        for item in page:
+            if not item or len(item) < 2:
+                continue
+            text_part = item[1]
+            if isinstance(text_part, (list, tuple)) and text_part:
+                text = str(text_part[0]).strip()
+            else:
+                text = str(text_part).strip()
+            if text:
+                lines.append(text)
+    return "\n".join(lines)
 
 
 def _read_image_text_tesseract(path: Path) -> str:
