@@ -72,10 +72,31 @@
   - 所有子命令 `--help` 逐个校验通过
   - `xyb process <dir>` 可产出图谱与报告，且统计 `dicom_count`
 
-## 对齐 graphify 提取能力（yolo 收敛结果）
-- 在存在 `graphify-out/graph.json` 时，`xyb process` 优先复用该图谱提取结果作为主基线；
-  同时保留 xyb 的 DICOM 增量补充能力。
-- 在 `xybtest` 实测对比：
-  - `graphify-out/graph.json`: 970 nodes / 1136 edges
-  - `xiaoyibao-out/graph.json`: 971 nodes / 1136 edges（多 1 个 root 节点）
-  - 关系分布（`shows/references/includes/...`）与 graphify **完全一致**。
+## 后续回归排障补充：中文 OCR 问题
+
+### 问题现象
+- 新增中文截图（肿瘤标志物 / CT 报告）扫描到目录后，图谱中未稳定出现对应医学实体。
+- 图片本身清晰，但 OCR 与后续关系抽取结果失真。
+
+### 根因
+- 本机 `tesseract` 环境缺少中文语言包，`--list-langs` 仅有：
+  - `eng`
+  - `osd`
+  - `snum`
+- 这会导致中文图片退化为英文 OCR 路径，后续概念抽取质量显著下降。
+
+### 修复方向
+- 代码层面已改为中文优先语言选择策略（优先 `chi_sim+eng`）
+- 文档层面已明确：
+  - 中文是核心语言
+  - OCR 不得静默退化
+  - PaddleOCR 应作为本地主力方案
+  - MinerU 作为开放增强方案
+  - Tesseract 作为拖底方案
+
+### 备注
+- `graphify-out/graph.json` 在当前项目中仅作**参考/对比用途**
+- `xyb process` 的主输入应来自：
+  - 实际扫描文件
+  - 标准化 chunk / semantic 中间产物
+  - `xyb` 自身抽取链路

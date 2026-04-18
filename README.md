@@ -163,6 +163,33 @@ xiaoyibao-out/
 - `xyb add` 的 YouTube 下载链路尚未完成迁移。
 - DICOM 当前适合做文件接入/元数据索引，建议主线优先使用 CT 报告文字、病理、检验文本建图。
 
+### 中文 OCR 说明（重要）
+
+`xyb` 的核心输入包含大量**中文病历截图、CT 报告截图、检验单截图、肿瘤标志物截图**。  
+因此图片解析默认按**中文优先**设计，而不是英文优先。
+
+当前建议的 OCR 能力分层：
+
+1. **主本地 OCR：PaddleOCR**
+   - 推荐作为中文医疗截图的主力 OCR
+   - 更适合病历截图、检验单、肿瘤标志物截图、CT/放射学报告截图
+   - 本地化更好，隐私更强
+
+2. **开放增强解析：MinerU**
+   - 更适合复杂 PDF、扫描件、版面恢复、多页文档
+   - 推荐作为增强链，而不是唯一 OCR 依赖
+
+3. **拖底兜底：Tesseract**
+   - 推荐语言包：`chi_sim+eng`
+   - 若系统仅安装 `eng`，中文图片解析质量会明显下降
+   - 适合作为最小闭环 fallback，不建议作为中文主 OCR
+
+如果你主要处理中文医疗图片，建议优先补齐中文 OCR 环境，再运行：
+
+```bash
+xyb full-update <path> --output-dir ./xiaoyibao-out
+```
+
 ---
 
 ## 7) Skills（稳定输出）
@@ -192,4 +219,5 @@ xyb markers-trend --graph ./xiaoyibao-out/graph.json --output-dir ./xiaoyibao-ou
 - 生效设计：`docs/superpowers/specs/2026-04-14-xiaoyibao-v1-design.md`
 - 生效计划：`docs/superpowers/plans/2026-04-14-xiaoyibao-v1.md`
 - 本次收尾报告：`docs/reports/2026-04-17-xyb-v1-dev-closure-report.md`
+- CLI 回归与 OCR 排障：`docs/reports/2026-04-18-cli-regression-round2.md`
 - 历史归档：`docs/archive/`

@@ -3,6 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
+import subprocess
+import tempfile
+from functools import lru_cache
 from pathlib import Path
 
 from xyb.analyze import god_nodes, surprising_connections, suggest_questions
@@ -40,6 +44,17 @@ _STOPWORDS = {
     "any", "one", "two", "three", "into", "onto", "over", "under", "between",
 }
 
+_IMAGE_MARKER_HINTS: list[tuple[str, re.Pattern[str]]] = [
+    ("CA19-9", re.compile(r"19\s*-\s*9", re.I)),
+    ("CA125", re.compile(r"(?<!\d)125(?!\d)", re.I)),
+    ("CA15-3", re.compile(r"15\s*-\s*3", re.I)),
+    ("CA72-4", re.compile(r"72\s*-\s*4", re.I)),
+    ("CA242", re.compile(r"242", re.I)),
+    ("CA50", re.compile(r"(?<!\d)50(?!\d)", re.I)),
+    ("CEA", re.compile(r"\bCEA\b", re.I)),
+    ("AFP", re.compile(r"\bAFP\b", re.I)),
+]
+
 
 def _read_text_content(path: Path) -> str:
     suffix = path.suffix.lower()
@@ -53,6 +68,90 @@ def _read_text_content(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="ignore")
     except Exception:
         return ""
+
+
+def _read_image_text(path: Path) -> str:
+    """Best-effort OCR for image files using local tesseract."""
+    if shutil.which("tesseract") is None:
+        return ""
+    src = path
+    tmp_png: Path | None = None
+    try:
+        if path.suffix.lower() in {".heic", ".heif"} and shutil.which("sips"):
+            fd, name = tempfile.mkstemp(suffix=".png")
+            Path(name).unlink(missing_ok=True)
+            subprocess.run(["sips", "-s", "format", "png", str(path), "--out", name], check=False, capture_output=True)
+            maybe = Path(name)
+            if maybe.exists():
+                src = maybe
+                tmp_png = maybe
+        return _run_best_effort_tesseract(src)
+    except Exception:
+        return ""
+    finally:
+        if tmp_png is not None and tmp_png.exists():
+            tmp_png.unlink(missing_ok=True)
+
+
+@lru_cache(maxsize=1)
+def _tesseract_langs() -> set[str]:
+    if shutil.which("tesseract") is None:
+        return set()
+    try:
+        proc = subprocess.run(
+            ["tesseract", "--list-langs"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+        return set(lines[1:]) if len(lines) > 1 else set()
+    except Exception:
+        return set()
+
+
+def _preferred_tesseract_lang() -> str | None:
+    langs = _tesseract_langs()
+    if {"chi_sim", "eng"}.issubset(langs):
+        return "chi_sim+eng"
+    if {"chi_tra", "eng"}.issubset(langs):
+        return "chi_tra+eng"
+    if "chi_sim" in langs:
+        return "chi_sim"
+    if "chi_tra" in langs:
+        return "chi_tra"
+    if "eng" in langs:
+        return "eng"
+    return None
+
+
+def _ocr_score(text: str) -> tuple[int, int, int]:
+    chinese = len(re.findall(r"[\u4e00-\u9fff]", text))
+    marker_hits = len(re.findall(r"CA\s*\d+|CEA|AFP|CT|病灶|放射学诊断|胰头|腹膜", text, re.I))
+    meaningful = len(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", text))
+    return (chinese, marker_hits, meaningful)
+
+
+def _run_best_effort_tesseract(src: Path) -> str:
+    lang = _preferred_tesseract_lang()
+    variants: list[list[str]] = []
+    base = ["tesseract", str(src), "stdout"]
+    if lang:
+        variants.append(base + ["-l", lang, "--psm", "6"])
+        variants.append(base + ["-l", lang, "--psm", "11"])
+    variants.append(base + ["--psm", "6"])
+    variants.append(base + ["--psm", "11"])
+
+    best = ""
+    best_score = (-1, -1, -1)
+    for cmd in variants:
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        text = (proc.stdout or "").strip()
+        score = _ocr_score(text)
+        if score > best_score:
+            best_score = score
+            best = text
+    return best
 
 
 def _extract_concepts(text: str, *, max_terms: int = 20) -> list[str]:
@@ -72,6 +171,60 @@ def _extract_concepts(text: str, *, max_terms: int = 20) -> list[str]:
 
     ranked = sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))
     return [term for term, _ in ranked[:max_terms]]
+
+
+def _extract_image_medical_concepts(text: str, *, max_terms: int = 20) -> list[str]:
+    """从图片 OCR 文本提取医学相关概念，避免纯噪声 token。"""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    results: list[str] = []
+
+    # 1) 肿瘤标志物 line 解析
+    value_re = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*(ng/ml|u/ml|iu/ml|u/mi|U/mi|U/mL|ng/mL)", re.I)
+    for line in lines:
+        marker_label = None
+        for mk, pat in _IMAGE_MARKER_HINTS:
+            if pat.search(line):
+                marker_label = mk
+                break
+        if not marker_label:
+            continue
+        mv = value_re.search(line)
+        if mv:
+            unit = mv.group(2).replace("U/mi", "U/mL").replace("u/mi", "U/mL")
+            results.append(f"{marker_label} {mv.group(1)} {unit}")
+        else:
+            results.append(marker_label)
+
+    # 2) 影像相关关键词
+    imaging_terms = [
+        ("CT", re.compile(r"\bCT\b|增强CT|复查CT|影像", re.I)),
+        ("PET-CT", re.compile(r"PET\s*-\s*CT|PETCT", re.I)),
+        ("病灶", re.compile(r"病灶|结节|占位", re.I)),
+        ("转移", re.compile(r"转移|播散", re.I)),
+        ("肝脏", re.compile(r"肝|肝脏", re.I)),
+        ("腹膜", re.compile(r"腹膜", re.I)),
+    ]
+    joined = "\n".join(lines)
+    for label, pat in imaging_terms:
+        if pat.search(joined):
+            results.append(label)
+
+    # 3) 日期信息
+    for m in re.finditer(r"(20\d{2}[-/年]\d{1,2}[-/月]\d{1,2})", joined):
+        results.append(m.group(1))
+
+    # 去重保序
+    dedup: list[str] = []
+    seen: set[str] = set()
+    for item in results:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(item)
+        if len(dedup) >= max_terms:
+            break
+    return dedup
 
 
 def _normalize_file_type(raw: str) -> str:
@@ -266,8 +419,16 @@ def process_path(path: Path, *, output_dir: Path, follow_symlinks: bool = False)
                 if file_key in covered_files and existing_ids:
                     # graphify 产物已覆盖该文件，避免重复生成大量弱关系
                     continue
-                text = _read_text_content(p) if ftype in {"document", "paper"} else ""
-                concepts = _extract_concepts(text) if text.strip() else []
+                if ftype in {"document", "paper"}:
+                    text = _read_text_content(p)
+                elif ftype == "image":
+                    text = _read_image_text(p)
+                else:
+                    text = ""
+                if ftype == "image":
+                    concepts = _extract_image_medical_concepts(text) if text.strip() else []
+                else:
+                    concepts = _extract_concepts(text) if text.strip() else []
                 concept_ids: list[str] = []
                 file_id = by_source_file.get(file_key, [""])[0]
                 for c in concepts:

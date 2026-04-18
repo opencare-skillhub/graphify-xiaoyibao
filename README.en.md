@@ -161,6 +161,33 @@ xiaoyibao-out/
 - `xyb add` YouTube/video ingestion path is not fully migrated yet.
 - For DICOM, current recommendation is file-level indexing / metadata-first; use CT report text + pathology/lab text as the primary graph source in v1.
 
+### Chinese OCR note (important)
+
+`xyb` works heavily with **Chinese medical screenshots**: CT reports, lab panels, tumor-marker screenshots, pathology screenshots, and similar materials.  
+So the image parsing path should be treated as **Chinese-first**, not English-first.
+
+Recommended OCR layers:
+
+1. **Primary local OCR: PaddleOCR**
+   - Recommended as the main OCR engine for Chinese medical screenshots
+   - Better suited for lab panels, tumor-marker screenshots, and CT/radiology report screenshots
+   - Better local/privacy characteristics
+
+2. **Open enhancement layer: MinerU**
+   - Better for complex PDFs, scanned documents, layout recovery, and multi-page parsing
+   - Best treated as an enhancement layer, not the only OCR dependency
+
+3. **Fallback / floor path: Tesseract**
+   - Recommended language pack: `chi_sim+eng`
+   - If only `eng` is installed, Chinese image extraction quality will degrade significantly
+   - Keep it as a lightweight fallback, not the primary Chinese OCR engine
+
+If your main input is Chinese medical screenshots, set up Chinese OCR first, then run:
+
+```bash
+xyb full-update <path> --output-dir ./xiaoyibao-out
+```
+
 ---
 
 ## 7) Skills (stable output)
@@ -190,4 +217,5 @@ Generated files:
 - Active spec: `docs/superpowers/specs/2026-04-14-xiaoyibao-v1-design.md`
 - Active plan: `docs/superpowers/plans/2026-04-14-xiaoyibao-v1.md`
 - Dev closure report: `docs/reports/2026-04-17-xyb-v1-dev-closure-report.md`
+- CLI regression + OCR debugging: `docs/reports/2026-04-18-cli-regression-round2.md`
 - Archive: `docs/archive/`
