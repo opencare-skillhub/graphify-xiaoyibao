@@ -3,10 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import shutil
-import subprocess
-import tempfile
-from functools import lru_cache
 from pathlib import Path
 
 from xyb.analyze import god_nodes, surprising_connections, suggest_questions
@@ -14,6 +10,7 @@ from xyb.build import build_from_json
 from xyb.cluster import cluster, score_all
 from xyb.detect import detect, docx_to_markdown, extract_pdf_text, xlsx_to_markdown
 from xyb.dicom import dicom_file_node_id, read_dicom_metadata
+from xyb.ocr import read_image_text
 from xyb.export import to_html, to_json
 from xyb.report import generate
 
@@ -68,90 +65,6 @@ def _read_text_content(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="ignore")
     except Exception:
         return ""
-
-
-def _read_image_text(path: Path) -> str:
-    """Best-effort OCR for image files using local tesseract."""
-    if shutil.which("tesseract") is None:
-        return ""
-    src = path
-    tmp_png: Path | None = None
-    try:
-        if path.suffix.lower() in {".heic", ".heif"} and shutil.which("sips"):
-            fd, name = tempfile.mkstemp(suffix=".png")
-            Path(name).unlink(missing_ok=True)
-            subprocess.run(["sips", "-s", "format", "png", str(path), "--out", name], check=False, capture_output=True)
-            maybe = Path(name)
-            if maybe.exists():
-                src = maybe
-                tmp_png = maybe
-        return _run_best_effort_tesseract(src)
-    except Exception:
-        return ""
-    finally:
-        if tmp_png is not None and tmp_png.exists():
-            tmp_png.unlink(missing_ok=True)
-
-
-@lru_cache(maxsize=1)
-def _tesseract_langs() -> set[str]:
-    if shutil.which("tesseract") is None:
-        return set()
-    try:
-        proc = subprocess.run(
-            ["tesseract", "--list-langs"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
-        return set(lines[1:]) if len(lines) > 1 else set()
-    except Exception:
-        return set()
-
-
-def _preferred_tesseract_lang() -> str | None:
-    langs = _tesseract_langs()
-    if {"chi_sim", "eng"}.issubset(langs):
-        return "chi_sim+eng"
-    if {"chi_tra", "eng"}.issubset(langs):
-        return "chi_tra+eng"
-    if "chi_sim" in langs:
-        return "chi_sim"
-    if "chi_tra" in langs:
-        return "chi_tra"
-    if "eng" in langs:
-        return "eng"
-    return None
-
-
-def _ocr_score(text: str) -> tuple[int, int, int]:
-    chinese = len(re.findall(r"[\u4e00-\u9fff]", text))
-    marker_hits = len(re.findall(r"CA\s*\d+|CEA|AFP|CT|病灶|放射学诊断|胰头|腹膜", text, re.I))
-    meaningful = len(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", text))
-    return (chinese, marker_hits, meaningful)
-
-
-def _run_best_effort_tesseract(src: Path) -> str:
-    lang = _preferred_tesseract_lang()
-    variants: list[list[str]] = []
-    base = ["tesseract", str(src), "stdout"]
-    if lang:
-        variants.append(base + ["-l", lang, "--psm", "6"])
-        variants.append(base + ["-l", lang, "--psm", "11"])
-    variants.append(base + ["--psm", "6"])
-    variants.append(base + ["--psm", "11"])
-
-    best = ""
-    best_score = (-1, -1, -1)
-    for cmd in variants:
-        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
-        text = (proc.stdout or "").strip()
-        score = _ocr_score(text)
-        if score > best_score:
-            best_score = score
-            best = text
-    return best
 
 
 def _extract_concepts(text: str, *, max_terms: int = 20) -> list[str]:
@@ -351,7 +264,7 @@ def _load_graphify_semantic_pipeline(root: Path) -> tuple[list[dict], list[dict]
     return nodes, edges, hyperedges
 
 
-def process_path(path: Path, *, output_dir: Path, follow_symlinks: bool = False) -> dict:
+def process_path(path: Path, *, output_dir: Path, follow_symlinks: bool = False, ocr_backend: str = "auto") -> dict:
     detection = detect(path, follow_symlinks=follow_symlinks)
     imported_nodes, imported_edges, imported_hyperedges = _load_graphify_semantic_pipeline(path)
     if not imported_nodes:
@@ -422,7 +335,7 @@ def process_path(path: Path, *, output_dir: Path, follow_symlinks: bool = False)
                 if ftype in {"document", "paper"}:
                     text = _read_text_content(p)
                 elif ftype == "image":
-                    text = _read_image_text(p)
+                    text = read_image_text(p, backend=ocr_backend)
                 else:
                     text = ""
                 if ftype == "image":

@@ -35,6 +35,7 @@ from xyb.hooks import install as hook_install, status as hook_status, uninstall 
 from xyb.report import generate, write_medical_summary_report
 from xyb.process import process_path
 from xyb.markers_trend import MARKERS, generate_markers_trend
+from xyb.ocr import OCR_BACKENDS
 from xyb.serve import _bfs, _dfs, _load_graph, _score_nodes, _subgraph_to_text, serve as serve_graph
 from xyb.semantic_backfill import merge_backfill_files
 from xyb.wiki import to_wiki
@@ -83,11 +84,13 @@ def build_parser() -> argparse.ArgumentParser:
     process_parser.add_argument('path', help='directory to process')
     process_parser.add_argument('--follow-symlinks', action='store_true', help='follow symlinks while scanning')
     process_parser.add_argument('--output-dir', default='xiaoyibao-out', help='directory to write graph/report artifacts')
+    process_parser.add_argument('--ocr-backend', choices=OCR_BACKENDS, default='auto', help='OCR backend selection: auto|paddle|mineru|tesseract')
 
     full_parser = subparsers.add_parser('full-update', help='run process then markers-trend in one command')
     full_parser.add_argument('path', help='directory to process')
     full_parser.add_argument('--follow-symlinks', action='store_true', help='follow symlinks while scanning')
     full_parser.add_argument('--output-dir', default='xiaoyibao-out', help='directory to write graph/report/trend artifacts')
+    full_parser.add_argument('--ocr-backend', choices=OCR_BACKENDS, default='auto', help='OCR backend selection: auto|paddle|mineru|tesseract')
     full_parser.add_argument(
         '--markers',
         default=",".join(m.key for m in MARKERS),
@@ -304,6 +307,7 @@ def main() -> None:
             Path(args.path),
             output_dir=Path(args.output_dir),
             follow_symlinks=args.follow_symlinks,
+            ocr_backend=args.ocr_backend,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
@@ -313,6 +317,7 @@ def main() -> None:
             Path(args.path),
             output_dir=Path(args.output_dir),
             follow_symlinks=args.follow_symlinks,
+            ocr_backend=args.ocr_backend,
         )
         wanted = {s.strip().lower() for s in args.markers.split(',') if s.strip()}
         selected = [m for m in MARKERS if m.key in wanted] if wanted else MARKERS
