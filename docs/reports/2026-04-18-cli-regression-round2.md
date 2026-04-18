@@ -100,3 +100,27 @@
   - 实际扫描文件
   - 标准化 chunk / semantic 中间产物
   - `xyb` 自身抽取链路
+
+## OCR backend 实装补充
+
+### 已完成
+- 统一 OCR backend 抽象
+- CLI 支持 `--ocr-backend`
+- backend 体系：
+  - `paddle-local`
+  - `paddle-api`
+  - `mineru-local`
+  - `mineru-api`
+  - `tesseract`
+
+### 远程 API 配置
+- 通过 `.env` / 环境变量加载
+- 不在代码中写死 token
+
+### MinerU API 特殊处理
+- 使用精准解析 API
+- 支持：
+  - batch
+  - 轮询
+  - 下载 zip
+  - 自动解压

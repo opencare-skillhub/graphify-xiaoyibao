@@ -191,8 +191,8 @@ def test_add_command_invokes_ingest_and_prints_saved_path(monkeypatch: pytest.Mo
 def test_full_update_command_runs_process_and_markers(monkeypatch: pytest.MonkeyPatch, capsys, tmp_path) -> None:
     called = {}
 
-    def fake_process(path, output_dir, follow_symlinks=False, ocr_backend='auto'):
-        called['process'] = (str(path), str(output_dir), follow_symlinks, ocr_backend)
+    def fake_process(path, output_dir, follow_symlinks=False, ocr_backend='auto', retry_failed_only=False):
+        called['process'] = (str(path), str(output_dir), follow_symlinks, ocr_backend, retry_failed_only)
         return {'nodes': 1, 'edges': 0}
 
     def fake_markers(graph_path, output_dir, markers=None):
@@ -208,20 +208,22 @@ def test_full_update_command_runs_process_and_markers(monkeypatch: pytest.Monkey
     assert 'process' in called
     assert 'markers' in called
     assert called['process'][3] == 'auto'
+    assert called['process'][4] is False
 
 
 def test_process_command_accepts_ocr_backend(monkeypatch: pytest.MonkeyPatch, capsys, tmp_path) -> None:
     called = {}
 
-    def fake_process(path, output_dir, follow_symlinks=False, ocr_backend='auto'):
-        called['process'] = (str(path), str(output_dir), follow_symlinks, ocr_backend)
+    def fake_process(path, output_dir, follow_symlinks=False, ocr_backend='auto', retry_failed_only=False):
+        called['process'] = (str(path), str(output_dir), follow_symlinks, ocr_backend, retry_failed_only)
         return {'nodes': 1, 'edges': 0}
 
     monkeypatch.setattr(cli, 'process_path', fake_process, raising=False)
-    monkeypatch.setattr(sys, 'argv', ['xyb', 'process', str(tmp_path), '--ocr-backend', 'tesseract'])
+    monkeypatch.setattr(sys, 'argv', ['xyb', 'process', str(tmp_path), '--ocr-backend', 'paddle-local'])
     cli.main()
     capsys.readouterr()
-    assert called['process'][3] == 'tesseract'
+    assert called['process'][3] == 'paddle-local'
+    assert called['process'][4] is False
 
 
 def test_path_command_prints_shortest_path(tmp_path) -> None:

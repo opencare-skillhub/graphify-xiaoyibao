@@ -166,16 +166,18 @@ xiaoyibao-out/
 `xyb` works heavily with **Chinese medical screenshots**: CT reports, lab panels, tumor-marker screenshots, pathology screenshots, and similar materials.  
 So the image parsing path should be treated as **Chinese-first**, not English-first.
 
-Recommended OCR layers:
+Recommended image-understanding layers:
 
-1. **Primary local OCR: PaddleOCR**
-   - Recommended as the main OCR engine for Chinese medical screenshots
-   - Better suited for lab panels, tumor-marker screenshots, and CT/radiology report screenshots
-   - Better local/privacy characteristics
+1. **Primary path: Multimodal LLM**
+   - For image-like medical inputs, prefer direct multimodal understanding + structured extraction
+   - Better suited for tumor-marker screenshots, CT/radiology report screenshots, lab panels, and pathology screenshots
 
-2. **Open enhancement layer: MinerU**
-   - Better for complex PDFs, scanned documents, layout recovery, and multi-page parsing
-   - Best treated as an enhancement layer, not the only OCR dependency
+2. **Fallback: OCR / layout**
+   - `paddle-local`
+   - `paddle-api`
+   - `mineru-local`
+   - `mineru-api`
+   - Useful when multimodal is unavailable, offline/privacy constraints apply, or auditable text intermediates are needed
 
 3. **Fallback / floor path: Tesseract**
    - Recommended language pack: `chi_sim+eng`
@@ -186,6 +188,57 @@ If your main input is Chinese medical screenshots, set up Chinese OCR first, the
 
 ```bash
 xyb full-update <path> --output-dir ./xiaoyibao-out
+```
+
+Recommended backend semantics:
+
+- `paddle-local`: local PaddleOCR, privacy-first
+- `paddle-api`: PaddleOCR online API / layout parsing
+- `mineru-local`: local MinerU CLI / local parsing, higher performance requirements
+- `mineru-api`: remote MinerU API
+- `tesseract`: local fallback OCR
+
+Default `auto` priority:
+
+```text
+multimodal > paddle-api > mineru-api > tesseract
+```
+
+If you use `paddle-api`, configure it via environment variables instead of storing keys in the repo:
+
+```bash
+export PADDLEOCR_API_URL="https://your-endpoint/layout-parsing"
+export PADDLEOCR_API_TOKEN="your-token"
+export PADDLEOCR_API_MODEL="PaddleOCR-VL-1.5"
+```
+
+If you use `mineru-api`, configure:
+
+```bash
+export MINERU_API_BASE_URL="https://mineru.net"
+export MINERU_API_TOKEN="your-token"
+```
+
+If you use the multimodal primary path (OpenAI-compatible), configure:
+
+```bash
+export OPENAI_COMPAT_BASE_URL="https://api.openai.com/v1"
+export OPENAI_COMPAT_API_KEY="your-key"
+export OPENAI_COMPAT_MODEL="gpt-5.4"
+export OPENAI_COMPAT_PROVIDER="openai"
+export OPENAI_COMPAT_TIMEOUT="120"
+```
+
+For Step or other OpenAI-compatible providers, replace:
+- `OPENAI_COMPAT_BASE_URL`
+- `OPENAI_COMPAT_API_KEY`
+- `OPENAI_COMPAT_MODEL`
+
+If you want host CLI multimodal as the highest-priority `auto` backend:
+
+```bash
+export XYB_HOST_MM_COMMAND="/Users/qinxiaoqiang/Downloads/llm-wiki-xiaoyibao/scripts/host_mm_extract.sh {image}"
+export XYB_HOST_MM_TIMEOUT="180"
 ```
 
 ---

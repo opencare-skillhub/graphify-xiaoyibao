@@ -1,0 +1,6 @@
+.env
+.env.*
+__pycache__/
+*.pyc
+xiaoyibao-out/
+xyb.egg-info/

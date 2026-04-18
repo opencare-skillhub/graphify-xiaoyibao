@@ -256,10 +256,65 @@ xyb/
   - 检验报告截图
 
 ### 当前阶段结论
-- v1 主线能力优先级：**PaddleOCR → MinerU → Tesseract**
-- 默认原则：**隐私优先、本地优先、中文优先**
-- `MinerU` 适合作为开放增强解析链
-- `Tesseract` 仅作为拖底兜底能力
+- v1 图片解析主线应调整为：**Multimodal LLM → OCR/layout → Tesseract**
+- 默认原则：
+  - 有多模态时，优先直接做视觉理解 + 结构化抽取
+  - 无多模态或受隐私/成本限制时，再走 OCR / layout
+  - `Tesseract` 仅作为拖底兜底能力
+
+### Multimodal-first 设计原则
+- 对图片类输入（截图、检验单、CT 报告、病理截图），应优先使用多模态 LLM
+- 目标不是只识别字符，而是**直接完成结构化理解与语义抽取**
+- 适用模型包括但不限于：
+  - `step-1o-vision`
+  - `gpt-5.4` 系列多模态能力
+- OCR / layout 在此阶段定位为：
+  - fallback
+  - 可审计中间文本产物
+  - 在无多模态、离线、隐私优先场景下的替代路径
+
+### OCR backend 命名约定
+为避免“同一种引擎的本地 / API 两种模式”混淆，`xyb` 统一采用以下 backend 命名：
+
+- `paddle-local`
+- `paddle-api`
+- `mineru-local`
+- `mineru-api`
+- `tesseract`
+
+默认 `auto` 选择顺序（OCR fallback 层）：
+
+```text
+paddle-local > paddle-api > mineru-local > mineru-api > tesseract
+```
+
+### API 配置约定
+所有远程解析后端统一通过 `.env` / 环境变量配置，不允许把真实 token 写入源码或文档示例。
+
+#### PaddleOCR API
+- `PADDLEOCR_API_URL`
+- `PADDLEOCR_API_TOKEN`
+- `PADDLEOCR_API_MODEL`
+
+#### MinerU API
+- `MINERU_API_BASE_URL`
+- `MINERU_API_TOKEN`
+
+### MinerU API 设计约束
+`mineru-api` 仅采用**精准解析 API**，不接入轻量 Agent API。
+
+原因：
+- 支持 batch
+- 支持高精度输出
+- 支持 zip 包结果
+- 更适合复杂病历 / 扫描件 / 多格式结构化提取
+
+必须处理的特殊流程：
+- batch 上传 URL 申请
+- 上传后自动触发解析
+- 轮询任务状态
+- 下载 `full_zip_url`
+- 自动解压并提取 markdown / json
 
 ---
 

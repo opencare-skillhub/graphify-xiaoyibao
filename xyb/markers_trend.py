@@ -90,6 +90,48 @@ def extract_marker_rows(graph: dict, markers: list[MarkerSpec] | None = None) ->
     return sorted(dedup.values(), key=lambda x: (x["marker_key"], x["date"], x["value"]))
 
 
+def load_normalized_marker_rows(output_dir: Path, markers: list[MarkerSpec] | None = None) -> list[dict]:
+    markers = markers or MARKERS
+    allow = {m.key for m in markers}
+    path = output_dir / "normalized" / "markers.jsonl"
+    if not path.exists():
+        return []
+    rows: list[dict] = []
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        key = str(obj.get("marker_key", ""))
+        if key not in allow:
+            continue
+        date_s = str(obj.get("date", ""))
+        try:
+            d = dt.date.fromisoformat(date_s)
+        except Exception:
+            continue
+        try:
+            value = float(obj.get("value"))
+        except Exception:
+            continue
+        rows.append({
+            "date": d,
+            "marker_key": key,
+            "marker_label": str(obj.get("marker_label") or next((m.label for m in markers if m.key == key), key)),
+            "value": value,
+            "unit": str(obj.get("unit", "U/mL") or "U/mL"),
+            "source_file": str(obj.get("source_file", "")),
+            "label": str(obj.get("label", "")),
+        })
+    dedup: dict[tuple[dt.date, str, float, str], dict] = {}
+    for r in rows:
+        dedup[(r["date"], r["marker_key"], r["value"], r["unit"])] = r
+    return sorted(dedup.values(), key=lambda x: (x["marker_key"], x["date"], x["value"]))
+
+
 def aggregate_marker_series(rows: list[dict]) -> dict[str, list[dict]]:
     grouped: dict[str, dict[dt.date, list[float]]] = {}
     for r in rows:
@@ -111,8 +153,10 @@ def aggregate_marker_series(rows: list[dict]) -> dict[str, list[dict]]:
 
 def generate_markers_trend(graph_path: Path, output_dir: Path, markers: list[MarkerSpec] | None = None) -> dict:
     markers = markers or MARKERS
-    graph = json.loads(graph_path.read_text(encoding="utf-8"))
-    rows = extract_marker_rows(graph, markers)
+    rows = load_normalized_marker_rows(output_dir, markers)
+    if not rows:
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+        rows = extract_marker_rows(graph, markers)
     series = aggregate_marker_series(rows)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -186,10 +230,9 @@ def generate_markers_trend(graph_path: Path, output_dir: Path, markers: list[Mar
         pass
 
     return {
-        "csv": str(csv_path),
-        "summary": str(summary_path),
-        "plot": str(png_path) if plot_ok else None,
+        "csv": str(csv_path.resolve()),
+        "summary": str(summary_path.resolve()),
+        "plot": str(png_path.resolve()) if plot_ok else None,
         "rows": len(rows),
         "markers_with_data": sum(1 for k in marker_by_key if series.get(k)),
     }
-

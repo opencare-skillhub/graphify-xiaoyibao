@@ -84,13 +84,15 @@ def build_parser() -> argparse.ArgumentParser:
     process_parser.add_argument('path', help='directory to process')
     process_parser.add_argument('--follow-symlinks', action='store_true', help='follow symlinks while scanning')
     process_parser.add_argument('--output-dir', default='xiaoyibao-out', help='directory to write graph/report artifacts')
-    process_parser.add_argument('--ocr-backend', choices=OCR_BACKENDS, default='auto', help='OCR backend selection: auto|paddle|mineru|tesseract')
+    process_parser.add_argument('--ocr-backend', choices=OCR_BACKENDS, default='auto', help='backend selection: auto|host-cli|multimodal|paddle-local|paddle-api|mineru-local|mineru-api|tesseract')
+    process_parser.add_argument('--retry-failed-only', action='store_true', help='only retry files listed in xiaoyibao-out/ocr_failures_mineru.jsonl')
 
     full_parser = subparsers.add_parser('full-update', help='run process then markers-trend in one command')
     full_parser.add_argument('path', help='directory to process')
     full_parser.add_argument('--follow-symlinks', action='store_true', help='follow symlinks while scanning')
     full_parser.add_argument('--output-dir', default='xiaoyibao-out', help='directory to write graph/report/trend artifacts')
-    full_parser.add_argument('--ocr-backend', choices=OCR_BACKENDS, default='auto', help='OCR backend selection: auto|paddle|mineru|tesseract')
+    full_parser.add_argument('--ocr-backend', choices=OCR_BACKENDS, default='auto', help='backend selection: auto|host-cli|multimodal|paddle-local|paddle-api|mineru-local|mineru-api|tesseract')
+    full_parser.add_argument('--retry-failed-only', action='store_true', help='only retry files listed in xiaoyibao-out/ocr_failures_mineru.jsonl')
     full_parser.add_argument(
         '--markers',
         default=",".join(m.key for m in MARKERS),
@@ -175,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     update_parser = subparsers.add_parser('update', help='run incremental detect and print summary as json')
     update_parser.add_argument('path', help='directory to update')
-    update_parser.add_argument('--manifest-path', default='graphify-out/manifest.json', help='manifest path for incremental diff')
+    update_parser.add_argument('--manifest-path', default='xiaoyibao-out/manifest.json', help='manifest path for incremental diff')
 
     backfill_parser = subparsers.add_parser('backfill-merge', help='merge semantic backfill chunk files and rebuild graph outputs')
     backfill_parser.add_argument('path', help='graphify-out style directory containing semantic chunk files')
@@ -308,6 +310,7 @@ def main() -> None:
             output_dir=Path(args.output_dir),
             follow_symlinks=args.follow_symlinks,
             ocr_backend=args.ocr_backend,
+            retry_failed_only=args.retry_failed_only,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
@@ -318,6 +321,7 @@ def main() -> None:
             output_dir=Path(args.output_dir),
             follow_symlinks=args.follow_symlinks,
             ocr_backend=args.ocr_backend,
+            retry_failed_only=args.retry_failed_only,
         )
         wanted = {s.strip().lower() for s in args.markers.split(',') if s.strip()}
         selected = [m for m in MARKERS if m.key in wanted] if wanted else MARKERS

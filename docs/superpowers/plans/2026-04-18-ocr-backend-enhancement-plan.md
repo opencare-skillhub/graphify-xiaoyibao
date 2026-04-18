@@ -9,7 +9,7 @@
 
 将 `xyb` 的中文医疗资料解析链正式升级为：
 
-> **PaddleOCR（隐私/本地主力） → MinerU（开放增强） → Tesseract（拖底）**
+> **Multimodal LLM（主链） → OCR/layout（fallback） → Tesseract（拖底）**
 
 并把该能力稳定接入：
 
@@ -32,65 +32,70 @@
 
 ## 3. 能力分层
 
-### L1：PaddleOCR
-- 作为本地主力 OCR
+### L1：Multimodal LLM
+- 作为图片解析主链
 - 重点处理：
   - 肿瘤标志物截图
   - CT / 放射学报告截图
   - 检验单 / 病理单
+- 目标：
+  - 直接完成视觉理解
+  - 直接输出结构化抽取结果
+  - 减少手写规则与 OCR 误差传递
 
-### L2：MinerU
-- 作为开放增强链
+### L2：OCR / layout fallback
+- 作为 fallback 与可审计中间产物
+- 包括：
+  - `paddle-local`
+  - `paddle-api`
+  - `mineru-local`
+  - `mineru-api`
+
+### L3：Tesseract
+- 作为拖底兜底路径
+- 仅在更强 backend 不可用时使用
+
+### L4：MinerU / Paddle layout 增强
+- 用于复杂 PDF / 扫描件 / 版面恢复
 - 重点处理：
   - 多页 PDF
   - 扫描文档
   - 复杂版式恢复
-- 接入形态优先级：
-  1. 本地 CLI
-  2. API（上传 / 解析 / 轮询）
-
-### L3：Tesseract
-- 作为最小闭环兜底
-- 保留本地 `subprocess` 调用方式
+- 接入形态：
+  - 本地 CLI
+  - API（上传 / 解析 / 轮询）
 
 ---
 
 ## 4. 任务拆解
 
-### 任务 A：OCR backend 抽象
-- 新增统一 backend 接口
-- 统一输入输出 contract
+### 任务 A：多模态抽取 backend 抽象
+- 新增统一 image extract backend 接口
 - 支持：
-  - `auto`
-  - `paddle`
-  - `mineru`
+  - `multimodal`
+  - `ocr-fallback`
   - `tesseract`
 
 交付物建议：
 - `xyb/ocr.py`
 - `xyb/ocr_backends/`
+- `xyb/mm_extract.py`
 
 ### 任务 B：Tesseract 逻辑迁移整理
 - 将 `xyb/process.py` 中现有 Tesseract 逻辑抽离
 - 保持现有 best-effort 行为
 - 补中文语言包告警
 
-### 任务 C：PaddleOCR backend
+### 任务 C：OCR/layout fallback 层
 - 增加 optional dependency
-- 封装本地 PaddleOCR 调用
+- 封装 Paddle / MinerU / Tesseract
 - 输出统一文本 / block 结构
-- 在 `auto` 策略中优先于 Tesseract
+- 仅在多模态不可用时启用
 
-### 任务 D：MinerU backend
-- 先调研并确定接入路径：
-  - 本地 CLI
-  - API
-- 若先做 API：
-  - token 配置
-  - 文件上传
-  - 解析任务提交
-  - 状态轮询
-  - 结果归一化
+### 任务 D：Multimodal backend
+- 对图片类输入优先调用多模态模型
+- 输出结构化 JSON / 图谱抽取中间表示
+- 必要时再回退 OCR 文本
 
 ### 任务 E：process 主链接入
 - `xyb process` 支持 `--ocr-backend`
@@ -139,4 +144,3 @@
 - branch: `main`
 - baseline commit: `5abf667`
 - message: `chore: save OCR strategy baseline before backend refactor`
-

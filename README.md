@@ -168,16 +168,19 @@ xiaoyibao-out/
 `xyb` 的核心输入包含大量**中文病历截图、CT 报告截图、检验单截图、肿瘤标志物截图**。  
 因此图片解析默认按**中文优先**设计，而不是英文优先。
 
-当前建议的 OCR 能力分层：
+当前建议的图片解析能力分层：
 
-1. **主本地 OCR：PaddleOCR**
-   - 推荐作为中文医疗截图的主力 OCR
-   - 更适合病历截图、检验单、肿瘤标志物截图、CT/放射学报告截图
-   - 本地化更好，隐私更强
+1. **主链：Multimodal LLM**
+   - 对图片类输入优先使用多模态模型直接做视觉理解 + 结构化抽取
+   - 更适合肿瘤标志物截图、CT/放射学报告截图、检验单、病理截图
+   - 避免“先 OCR 再写大量规则”的远路
 
-2. **开放增强解析：MinerU**
-   - 更适合复杂 PDF、扫描件、版面恢复、多页文档
-   - 推荐作为增强链，而不是唯一 OCR 依赖
+2. **fallback：OCR / layout**
+   - `paddle-local`
+   - `paddle-api`
+   - `mineru-local`
+   - `mineru-api`
+   - 用于无多模态、离线、隐私优先、或需要可审计文本中间产物的场景
 
 3. **拖底兜底：Tesseract**
    - 推荐语言包：`chi_sim+eng`
@@ -188,6 +191,57 @@ xiaoyibao-out/
 
 ```bash
 xyb full-update <path> --output-dir ./xiaoyibao-out
+```
+
+推荐 backend 语义：
+
+- `paddle-local`：本地 PaddleOCR，隐私优先
+- `paddle-api`：PaddleOCR 在线 API / layout parsing
+- `mineru-local`：本地 MinerU CLI / 本地解析，性能要求较高
+- `mineru-api`：MinerU 远程 API
+- `tesseract`：本地兜底 OCR
+
+默认 `auto` 优先级：
+
+```text
+multimodal > paddle-api > mineru-api > tesseract
+```
+
+若使用 `paddle-api`，请通过环境变量配置，不要把 key 写入仓库：
+
+```bash
+export PADDLEOCR_API_URL="https://your-endpoint/layout-parsing"
+export PADDLEOCR_API_TOKEN="your-token"
+export PADDLEOCR_API_MODEL="PaddleOCR-VL-1.5"
+```
+
+若使用 `mineru-api`，请配置：
+
+```bash
+export MINERU_API_BASE_URL="https://mineru.net"
+export MINERU_API_TOKEN="your-token"
+```
+
+若使用多模态主链（OpenAI-compatible），请配置：
+
+```bash
+export OPENAI_COMPAT_BASE_URL="https://api.openai.com/v1"
+export OPENAI_COMPAT_API_KEY="your-key"
+export OPENAI_COMPAT_MODEL="gpt-5.4"
+export OPENAI_COMPAT_PROVIDER="openai"
+export OPENAI_COMPAT_TIMEOUT="120"
+```
+
+如使用 Step 等兼容接口服务，只需替换：
+- `OPENAI_COMPAT_BASE_URL`
+- `OPENAI_COMPAT_API_KEY`
+- `OPENAI_COMPAT_MODEL`
+
+如使用宿主 CLI 多模态（`auto` 优先级最高），可配置：
+
+```bash
+export XYB_HOST_MM_COMMAND="/Users/qinxiaoqiang/Downloads/llm-wiki-xiaoyibao/scripts/host_mm_extract.sh {image}"
+export XYB_HOST_MM_TIMEOUT="180"
 ```
 
 ---

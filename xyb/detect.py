@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -434,17 +435,26 @@ def detect(root: Path, *, follow_symlinks: bool = False) -> dict:
 
 def load_manifest(manifest_path: str = _MANIFEST_PATH) -> dict[str, float]:
     try:
-        return json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        raw = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            return raw
+        return {}
     except Exception:
         return {}
 
 
+def _fingerprint(path: Path) -> dict[str, str | int]:
+    st = path.stat()
+    h = hashlib.sha1(f"{path.resolve()}::{st.st_size}::{int(st.st_mtime)}".encode("utf-8")).hexdigest()
+    return {"mtime": int(st.st_mtime), "size": int(st.st_size), "sha1": h}
+
+
 def save_manifest(files: dict[str, list[str]], manifest_path: str = _MANIFEST_PATH) -> None:
-    manifest: dict[str, float] = {}
+    manifest: dict[str, dict[str, str | int]] = {}
     for file_list in files.values():
         for f in file_list:
             try:
-                manifest[f] = Path(f).stat().st_mtime
+                manifest[f] = _fingerprint(Path(f))
             except OSError:
                 pass
     Path(manifest_path).parent.mkdir(parents=True, exist_ok=True)
@@ -465,12 +475,18 @@ def detect_incremental(root: Path, manifest_path: str = _MANIFEST_PATH) -> dict:
     unchanged_files: dict[str, list[str]] = {k: [] for k in full["files"]}
     for ftype, file_list in full["files"].items():
         for f in file_list:
-            stored_mtime = manifest.get(f)
+            stored = manifest.get(f)
             try:
-                current_mtime = Path(f).stat().st_mtime
+                current_fp = _fingerprint(Path(f))
             except Exception:
-                current_mtime = 0
-            if stored_mtime is None or current_mtime > stored_mtime:
+                current_fp = {"mtime": 0, "size": 0, "sha1": ""}
+            if isinstance(stored, (int, float)):
+                changed = current_fp["mtime"] > int(stored)
+            elif isinstance(stored, dict):
+                changed = str(stored.get("sha1", "")) != str(current_fp["sha1"])
+            else:
+                changed = True
+            if changed:
                 new_files[ftype].append(f)
             else:
                 unchanged_files[ftype].append(f)

@@ -164,6 +164,16 @@ python3 -m pytest tests -q
 3. 保留 Tesseract 作为最小闭环拖底能力（`chi_sim+eng` 优先）
 4. 将 CT / 检验 / 标志物截图做专用结构化抽取
 
+### 本轮新增开发结论
+- OCR backend 已统一抽象为：
+  - `paddle-local`
+  - `paddle-api`
+  - `mineru-local`
+  - `mineru-api`
+  - `tesseract`
+- `paddle-api` 已支持同步与 jobs 异步模式
+- `mineru-api` 已按精准解析 API 实现 batch / 轮询 / zip 下载 / 自动解压
+
 ---
 
 ## 7. 提示重点（含 DICOM 评估）
