@@ -9,20 +9,17 @@ from pathlib import Path
 
 
 class FileType(str, Enum):
-    CODE = "code"
     DOCUMENT = "document"
     PAPER = "paper"
     IMAGE = "image"
     VIDEO = "video"
+    DICOM = "dicom"
 
 
-_MANIFEST_PATH = "graphify-out/manifest.json"
+_MANIFEST_PATH = "xiaoyibao-out/manifest.json"
 
-CODE_EXTENSIONS = {
-    ".py", ".ts", ".js", ".jsx", ".tsx", ".go", ".rs", ".java", ".cpp", ".cc", ".cxx", ".c",
-    ".h", ".hpp", ".rb", ".swift", ".kt", ".kts", ".cs", ".scala", ".php", ".lua", ".toc",
-    ".zig", ".ps1", ".ex", ".exs", ".m", ".mm", ".jl", ".vue", ".svelte", ".dart", ".v", ".sv",
-}
+# xyb 不做代码扫描；保留该符号仅用于兼容其它模块引用。
+CODE_EXTENSIONS: set[str] = set()
 DOC_EXTENSIONS = {".md", ".txt", ".rst"}
 PAPER_EXTENSIONS = {".pdf"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".heic", ".heif"}
@@ -63,7 +60,7 @@ _PAPER_SIGNAL_THRESHOLD = 3
 _ASSET_DIR_MARKERS = {".imageset", ".xcassets", ".appiconset", ".colorset", ".launchimage"}
 _SKIP_DIRS = {
     "venv", ".venv", "env", ".env", "node_modules", "__pycache__", ".git",
-    "dist", "build", "target", "out", "site-packages", "lib64", "graphify-out",
+    "dist", "build", "target", "out", "site-packages", "lib64", "graphify-out", "xiaoyibao-out",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".eggs", "*.egg-info",
 }
 _SKIP_FILES = {
@@ -124,20 +121,28 @@ def _looks_like_paper(path: Path) -> bool:
         return False
 
 
-def classify_file(path: Path) -> FileType | None:
-    if path.name.lower().endswith(".blade.php"):
-        return FileType.CODE
+def _is_dicom(path: Path) -> bool:
     ext = path.suffix.lower()
-    if ext in CODE_EXTENSIONS:
-        return FileType.CODE
+    if ext in DICOM_EXTENSIONS:
+        return True
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(132)
+        return len(head) >= 132 and head[128:132] == b"DICM"
+    except Exception:
+        return False
+
+
+def classify_file(path: Path) -> FileType | None:
+    ext = path.suffix.lower()
     if ext in PAPER_EXTENSIONS:
         if any(part.endswith(tuple(_ASSET_DIR_MARKERS)) for part in path.parts):
             return None
         return FileType.PAPER
     if ext in IMAGE_EXTENSIONS:
         return FileType.IMAGE
-    if ext in DICOM_EXTENSIONS:
-        return FileType.DOCUMENT
+    if ext in DICOM_EXTENSIONS or _is_dicom(path):
+        return FileType.DICOM
     if ext in DOC_EXTENSIONS:
         if _looks_like_paper(path):
             return FileType.PAPER
@@ -330,18 +335,18 @@ def _is_ignored(path: Path, root: Path, patterns: list[tuple[Path, str]]) -> boo
 
 def detect(root: Path, *, follow_symlinks: bool = False) -> dict:
     files: dict[FileType, list[str]] = {
-        FileType.CODE: [],
         FileType.DOCUMENT: [],
         FileType.PAPER: [],
         FileType.IMAGE: [],
         FileType.VIDEO: [],
+        FileType.DICOM: [],
     }
     total_words = 0
     skipped_sensitive: list[str] = []
     medical_directory_hits = {value: 0 for value in _MEDICAL_DIRECTORY_BUCKETS.values()}
     ignore_patterns = _load_graphifyignore(root)
 
-    memory_dir = root / "graphify-out" / "memory"
+    memory_dir = root / "xiaoyibao-out" / "memory"
     scan_paths = [root]
     if memory_dir.exists():
         scan_paths.append(memory_dir)
@@ -373,7 +378,7 @@ def detect(root: Path, *, follow_symlinks: bool = False) -> dict:
                     seen.add(p)
                     all_files.append(p)
 
-    converted_dir = root / "graphify-out" / "converted"
+    converted_dir = root / "xiaoyibao-out" / "converted"
 
     for p in all_files:
         in_memory = memory_dir.exists() and str(p).startswith(str(memory_dir))

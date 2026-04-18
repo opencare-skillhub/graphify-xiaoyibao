@@ -4,9 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xyb"
-version = "0.1.0"
+version = "0.1.1"
 description = "xiaoyibao CLI migrated from graphify shape"
 requires-python = ">=3.11"
+dependencies = [
+    "networkx>=3.0",
+]
 
 [project.scripts]
 xyb = "xyb.__main__:main"
@@ -16,3 +19,15 @@ package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
 include = ["xyb*"]
+
+[project.optional-dependencies]
+watch = ["watchdog"]
+pdf = ["pypdf"]
+office = ["python-docx", "openpyxl"]
+dicom = ["pydicom"]
+neo4j = ["neo4j"]
+all = ["watchdog", "pypdf", "python-docx", "openpyxl", "pydicom", "neo4j"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".git", ".venv", "dist", "build", "docs/archive"]

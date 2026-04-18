@@ -2,8 +2,10 @@
 
 [中文](README.md) | [English](README.en.md)
 
-`xyb` 是一个独立 CLI 项目：输入本地资料（代码/文档/图片等）→ 抽取关系 → 构建知识图谱 → 输出报告与多种导出格式。  
+`xyb` 是一个独立 CLI 项目：输入本地病情资料（文档/PDF/图片/视频/DICOM）→ 抽取关系 → 构建知识图谱 → 输出报告与多种导出格式。  
 当前版本已完成主链迁移，并加入病情资料场景增强（目录模板、递归扫描、病情摘要、增量 backfill）。
+
+**当前版本：`v0.1.1`**
 
 ---
 
@@ -12,7 +14,7 @@
 ### 核心主链
 - `scan`：递归扫描目录并分类统计
 - `extract`：抽取节点/边结构化结果
-- `analyze`：一键 `extract + build + report`
+- `process`：主线一键处理（medical-first，含 DICOM 元数据）
 - `graph-report`：从 extraction 生成图谱与报告
 - `query/path/explain`：图谱查询、最短路径、节点解释
 - `update`：增量扫描
@@ -32,15 +34,16 @@
 - 默认递归扫描子目录
 - `report` 生成病情摘要（`MEDICAL_SUMMARY.md`）
 - 查询/解释可显示病情目录 bucket 信号
+- `markers-trend`：一键生成肿瘤标志物趋势 `csv/png/summary`
 
 ---
 
 ## 2) 快速开始
 
 ```bash
-python3 -m venv .venv
+uv venv .venv
 source .venv/bin/activate
-pip install -e .
+uv pip install -e .
 xyb --help
 ```
 
@@ -55,16 +58,16 @@ xyb init ./my-records
 # 2) 扫描目录（递归）
 xyb scan ./my-records
 
-# 3) 一键产出图谱与报告
-xyb analyze ./my-records --output-dir ./graphify-out
+# 3) 一键产出图谱与报告（推荐）
+xyb process ./my-records --output-dir ./xiaoyibao-out
 
 # 4) 病情摘要报告
-xyb report ./my-records --output-dir ./graphify-out
+xyb report ./my-records --output-dir ./xiaoyibao-out
 
 # 5) 图谱查询
-xyb query "pancreas tumor" --graph ./graphify-out/graph.json
-xyb path "Pancreas" "Tumor" --graph ./graphify-out/graph.json
-xyb explain "Pancreas" --graph ./graphify-out/graph.json
+xyb query "pancreas tumor" --graph ./xiaoyibao-out/graph.json
+xyb path "Pancreas" "Tumor" --graph ./xiaoyibao-out/graph.json
+xyb explain "Pancreas" --graph ./xiaoyibao-out/graph.json
 ```
 
 ---
@@ -75,6 +78,7 @@ xyb explain "Pancreas" --graph ./graphify-out/graph.json
 ```bash
 xyb init <path>
 xyb scan <path>
+xyb process <path> --output-dir ./xiaoyibao-out
 xyb extract <path>
 xyb analyze <path> --output-dir ./graphify-out
 xyb build <extract.json> --output-dir ./graphify-out
@@ -83,6 +87,7 @@ xyb report <path> --output-dir ./graphify-out
 xyb update <path>
 xyb watch <path>
 xyb backfill-merge ./graphify-out
+xyb markers-trend --graph ./xiaoyibao-out/graph.json --output-dir ./xiaoyibao-out
 ```
 
 ### 查询/服务
@@ -138,7 +143,7 @@ xyb hook uninstall
 默认输出目录沿用：
 
 ```text
-graphify-out/
+xiaoyibao-out/
 ├── .graphify_extract.json
 ├── .graphify_analysis.json
 ├── .graphify_labels.json
@@ -158,7 +163,29 @@ graphify-out/
 
 ---
 
-## 7) 文档
+## 7) Skills（稳定输出）
+
+已内置本地 Skill：
+
+- `.agents/skills/xyb-tumor-markers-trend/SKILL.md`
+
+用于稳定生成肿瘤标志物趋势输出（CA19-9 / CEA / AFP / CA50 / CA72-4 / CA125）。
+
+常用命令：
+
+```bash
+xyb markers-trend --graph ./xiaoyibao-out/graph.json --output-dir ./xiaoyibao-out
+```
+
+输出文件：
+
+- `tumor_markers_trend.csv`
+- `tumor_markers_trend.png`
+- `tumor_markers_trend_summary.md`
+
+---
+
+## 8) 文档
 
 - 生效设计：`docs/superpowers/specs/2026-04-14-xiaoyibao-v1-design.md`
 - 生效计划：`docs/superpowers/plans/2026-04-14-xiaoyibao-v1.md`

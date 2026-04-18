@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import networkx as nx
@@ -32,6 +33,8 @@ from xyb.install import (
 )
 from xyb.hooks import install as hook_install, status as hook_status, uninstall as hook_uninstall
 from xyb.report import generate, write_medical_summary_report
+from xyb.process import process_path
+from xyb.markers_trend import MARKERS, generate_markers_trend
 from xyb.serve import _bfs, _dfs, _load_graph, _score_nodes, _subgraph_to_text, serve as serve_graph
 from xyb.semantic_backfill import merge_backfill_files
 from xyb.wiki import to_wiki
@@ -75,6 +78,20 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser = subparsers.add_parser('scan', help='scan a directory recursively and print detect summary as json')
     scan_parser.add_argument('path', help='directory to scan')
     scan_parser.add_argument('--follow-symlinks', action='store_true', help='follow symlinks while scanning')
+
+    process_parser = subparsers.add_parser('process', help='medical-first processing pipeline (non-code + DICOM metadata)')
+    process_parser.add_argument('path', help='directory to process')
+    process_parser.add_argument('--follow-symlinks', action='store_true', help='follow symlinks while scanning')
+    process_parser.add_argument('--output-dir', default='xiaoyibao-out', help='directory to write graph/report artifacts')
+
+    marker_parser = subparsers.add_parser('markers-trend', help='build tumor marker trend csv/png/summary from graph.json')
+    marker_parser.add_argument('--graph', default='xiaoyibao-out/graph.json', help='graph json path')
+    marker_parser.add_argument('--output-dir', default='xiaoyibao-out', help='output directory for trend artifacts')
+    marker_parser.add_argument(
+        '--markers',
+        default=",".join(m.key for m in MARKERS),
+        help='comma-separated marker keys, e.g. ca19_9,cea,afp,ca50,ca72_4,ca125',
+    )
 
     extract_parser = subparsers.add_parser('extract', help='extract graph payload from files collected under a path')
     extract_parser.add_argument('path', help='file or directory to extract')
@@ -202,7 +219,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.version:
-        print('xyb 0.1.0')
+        print('xyb 0.1.1')
         return
 
     if args.command == 'init':
@@ -269,6 +286,26 @@ def main() -> None:
 
     if args.command == 'scan':
         result = detect(Path(args.path), follow_symlinks=args.follow_symlinks)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == 'process':
+        result = process_path(
+            Path(args.path),
+            output_dir=Path(args.output_dir),
+            follow_symlinks=args.follow_symlinks,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == 'markers-trend':
+        wanted = {s.strip().lower() for s in args.markers.split(',') if s.strip()}
+        selected = [m for m in MARKERS if m.key in wanted] if wanted else MARKERS
+        result = generate_markers_trend(
+            graph_path=Path(args.graph),
+            output_dir=Path(args.output_dir),
+            markers=selected,
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 

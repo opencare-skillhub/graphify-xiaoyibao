@@ -43,7 +43,7 @@ def generate_medical_summary(detection_result: dict, root: str | Path) -> str:
 
     files = detection_result.get('files', {})
     lines += ["", "## 文件类型统计"]
-    for file_type in ['paper', 'document', 'image', 'video', 'code']:
+    for file_type in ['paper', 'document', 'dicom', 'image', 'video']:
         lines.append(f"- {file_type}: {len(files.get(file_type, []))}")
 
     lines += ["", "## 建议"]

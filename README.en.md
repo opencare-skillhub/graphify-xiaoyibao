@@ -2,8 +2,10 @@
 
 [中文](README.md) | [English](README.en.md)
 
-`xyb` is an independent CLI project: local inputs (code/docs/images, etc.) → extraction → knowledge graph → reports and exports.  
+`xyb` is an independent CLI project: local medical records (docs/PDF/images/video/DICOM) → extraction → knowledge graph → reports and exports.  
 Current version includes migrated core pipeline plus medical-record workflow enhancements (template init, recursive scan, medical summary, incremental backfill).
+
+**Current version: `v0.1.1`**
 
 ---
 
@@ -12,7 +14,7 @@ Current version includes migrated core pipeline plus medical-record workflow enh
 ### Core pipeline
 - `scan`: recursive directory scan + classification summary
 - `extract`: structured node/edge extraction
-- `analyze`: one-shot `extract + build + report`
+- `process`: primary medical-first pipeline (includes DICOM metadata)
 - `graph-report`: graph + report from extraction JSON
 - `query/path/explain`: graph query, shortest path, node explain
 - `update`: incremental scan
@@ -32,15 +34,16 @@ Current version includes migrated core pipeline plus medical-record workflow enh
 - recursive subdirectory scanning by default
 - `report`: medical summary (`MEDICAL_SUMMARY.md`)
 - query/explain can surface medical directory bucket signals
+- `markers-trend`: one-shot tumor-marker trend outputs (`csv/png/summary`)
 
 ---
 
 ## 2) Quick start
 
 ```bash
-python3 -m venv .venv
+uv venv .venv
 source .venv/bin/activate
-pip install -e .
+uv pip install -e .
 xyb --help
 ```
 
@@ -55,16 +58,16 @@ xyb init ./my-records
 # 2) Scan recursively
 xyb scan ./my-records
 
-# 3) One-shot graph + report
-xyb analyze ./my-records --output-dir ./graphify-out
+# 3) One-shot graph + report (recommended)
+xyb process ./my-records --output-dir ./xiaoyibao-out
 
 # 4) Medical summary report
-xyb report ./my-records --output-dir ./graphify-out
+xyb report ./my-records --output-dir ./xiaoyibao-out
 
 # 5) Graph queries
-xyb query "pancreas tumor" --graph ./graphify-out/graph.json
-xyb path "Pancreas" "Tumor" --graph ./graphify-out/graph.json
-xyb explain "Pancreas" --graph ./graphify-out/graph.json
+xyb query "pancreas tumor" --graph ./xiaoyibao-out/graph.json
+xyb path "Pancreas" "Tumor" --graph ./xiaoyibao-out/graph.json
+xyb explain "Pancreas" --graph ./xiaoyibao-out/graph.json
 ```
 
 ---
@@ -75,14 +78,16 @@ xyb explain "Pancreas" --graph ./graphify-out/graph.json
 ```bash
 xyb init <path>
 xyb scan <path>
+xyb process <path> --output-dir ./xiaoyibao-out
 xyb extract <path>
 xyb analyze <path> --output-dir ./graphify-out
 xyb build <extract.json> --output-dir ./graphify-out
 xyb graph-report <extract.json> --output-dir ./graphify-out
-xyb report <path> --output-dir ./graphify-out
+xyb report <path> --output-dir ./xiaoyibao-out
 xyb update <path>
 xyb watch <path>
 xyb backfill-merge ./graphify-out
+xyb markers-trend --graph ./xiaoyibao-out/graph.json --output-dir ./xiaoyibao-out
 ```
 
 ### Query / service
@@ -136,7 +141,7 @@ xyb hook uninstall
 ## 5) Default outputs
 
 ```text
-graphify-out/
+xiaoyibao-out/
 ├── .graphify_extract.json
 ├── .graphify_analysis.json
 ├── .graphify_labels.json
@@ -156,10 +161,31 @@ graphify-out/
 
 ---
 
-## 7) Docs
+## 7) Skills (stable output)
+
+Built-in local skill:
+
+- `.agents/skills/xyb-tumor-markers-trend/SKILL.md`
+
+Use this for recurring/stable tumor marker trend outputs (CA19-9 / CEA / AFP / CA50 / CA72-4 / CA125).
+
+Command:
+
+```bash
+xyb markers-trend --graph ./xiaoyibao-out/graph.json --output-dir ./xiaoyibao-out
+```
+
+Generated files:
+
+- `tumor_markers_trend.csv`
+- `tumor_markers_trend.png`
+- `tumor_markers_trend_summary.md`
+
+---
+
+## 8) Docs
 
 - Active spec: `docs/superpowers/specs/2026-04-14-xiaoyibao-v1-design.md`
 - Active plan: `docs/superpowers/plans/2026-04-14-xiaoyibao-v1.md`
 - Dev closure report: `docs/reports/2026-04-17-xyb-v1-dev-closure-report.md`
 - Archive: `docs/archive/`
-
