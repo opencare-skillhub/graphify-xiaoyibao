@@ -23,6 +23,7 @@ from xyb.normalized import (
 )
 from xyb.export import to_html, to_json
 from xyb.report import generate
+from xyb.validation import validate_marker_records, write_validation_outputs
 
 
 def _id(prefix: str, *parts: str) -> str:
@@ -632,6 +633,7 @@ def process_path(
     save_manifest(detection.get("files", {}), str(output_dir / "manifest.json"))
 
     current_files = {f for fl in detection.get("files", {}).values() for f in fl}
+    _progress("extracting marker records...")
     text_marker_records = extract_marker_records_from_texts(file_texts_for_norm)
     node_marker_records = extract_marker_records_from_nodes(extraction["nodes"])
     # 以文本直抽为主（更能区分“结果值 vs 参考范围”），节点抽取仅补充文本未覆盖文件
@@ -639,6 +641,18 @@ def process_path(
     marker_records = list(text_marker_records)
     marker_records += [r for r in node_marker_records if str(r.get("source_file", "")) not in text_sources]
     write_normalized_markers(output_dir, marker_records, current_files)
+    _progress("validating marker records...")
+    validated_rows, validation_conflicts, review_queue, validation_summary = validate_marker_records(
+        marker_records,
+        progress_cb=lambda i, t: _progress("validating", done=i, total=t),
+    )
+    validation_output = write_validation_outputs(
+        output_dir,
+        validated_rows,
+        validation_conflicts,
+        review_queue,
+        validation_summary,
+    )
     # 失败文件追踪：主流程继续，失败文件落盘用于补跑收敛
     if mineru_failures:
         give_up_after = max(1, int(os.getenv("XYB_MINERU_GIVEUP_AFTER", "6")))
@@ -708,6 +722,7 @@ def process_path(
             "failed_files": len(file_failures),
             "failed_file_list": str(process_failure_file.resolve()) if file_failures else None,
         },
+        "validation": validation_output,
         "log_file": str(log_file.resolve()),
     }
     summary_file.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
