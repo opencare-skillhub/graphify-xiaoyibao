@@ -47,19 +47,24 @@ def llm_available() -> bool:
     return bool(os.getenv("OPENAI_COMPAT_BASE_URL") and os.getenv("OPENAI_COMPAT_API_KEY") and os.getenv("OPENAI_COMPAT_MODEL"))
 
 
-def _llm_extract_observation_facts(source_file: str, panel_id: str, text: str) -> list[dict]:
+def _llm_extract_facts(source_file: str, panel_id: str, text: str) -> dict:
     base_url = os.getenv("OPENAI_COMPAT_BASE_URL", "").rstrip("/")
     api_key = os.getenv("OPENAI_COMPAT_API_KEY", "")
     model = os.getenv("OPENAI_COMPAT_MODEL", "")
     if not base_url or not api_key or not model:
-        return []
+        return {}
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     prompt = (
         "你是医疗事实抽取器。只输出 JSON。"
-        "从输入中提取 observation_facts（仅肿瘤标志物/检验项），"
-        "字段：item_code,item_name,value,unit,reference_range,abnormal_flag,report_date,evidence_text,confidence。"
+        "从输入中提取以下结构："
+        "observation_facts（肿瘤标志物/血液生化等检验项），"
+        "diagnosis_facts（CT/影像/文字报告中的检查所见与结论），"
+        "conflict_facts（候选冲突）。"
+        "observation_facts 字段：item_code,item_name,value,unit,reference_range,abnormal_flag,report_date,evidence_text,confidence。"
+        "diagnosis_facts 字段：study_type,finding,impression,anatomy,report_date,evidence_text,confidence。"
         "必须区分结果值与参考范围；不能把项目名中的数字当结果值。"
         "如果不确定请不输出该项。"
+        "严格返回 JSON 对象，键只允许：observation_facts,diagnosis_facts,conflict_facts。"
         f"\nsource_file={source_file}\npanel_id={panel_id or ''}\ntext:\n{text[:5000]}"
     )
     payload: dict[str, Any] = {
@@ -74,12 +79,52 @@ def _llm_extract_observation_facts(source_file: str, panel_id: str, text: str) -
         start = content.find("{")
         end = content.rfind("}")
         body = json.loads(content[start : end + 1]) if start >= 0 and end > start else {}
-        facts = body.get("observation_facts", [])
-        if isinstance(facts, list):
-            return [x for x in facts if isinstance(x, dict)]
+        out = {
+            "observation_facts": [x for x in body.get("observation_facts", []) if isinstance(x, dict)] if isinstance(body.get("observation_facts", []), list) else [],
+            "diagnosis_facts": [x for x in body.get("diagnosis_facts", []) if isinstance(x, dict)] if isinstance(body.get("diagnosis_facts", []), list) else [],
+            "conflict_facts": [x for x in body.get("conflict_facts", []) if isinstance(x, dict)] if isinstance(body.get("conflict_facts", []), list) else [],
+        }
+        return out
     except Exception:
+        return {}
+    return {}
+
+
+def _fallback_extract_diagnosis_facts(source_file: str, panel_id: str, text: str) -> list[dict]:
+    """
+    轻量兜底：仅在文本出现影像关键词时产出基础 diagnosis_fact。
+    """
+    t = text or ""
+    if not any(k in t for k in ("CT", "影像", "检查所见", "诊断", "印象", "病灶")):
         return []
-    return []
+    source = source_file if not panel_id else f"{source_file}#panel{panel_id}"
+    finding = ""
+    impression = ""
+    for ln in [x.strip() for x in t.splitlines() if x.strip()]:
+        if any(k in ln for k in ("检查所见", "所见")) and not finding:
+            finding = ln
+        if any(k in ln for k in ("影像诊断", "诊断", "印象")) and not impression:
+            impression = ln
+    if not finding and not impression:
+        # 没有明确锚点时，兜底取前 2 行作为弱 evidence
+        lines = [x.strip() for x in t.splitlines() if x.strip()]
+        snippet = " ".join(lines[:2])[:260]
+        finding = snippet
+    return [
+        {
+            "fact_type": "diagnosis_fact",
+            "source_file": source,
+            "panel_id": f"panel_{panel_id}" if panel_id else "",
+            "report_date": _extract_date(t),
+            "study_type": "CT" if "CT" in t else "report",
+            "finding": finding,
+            "impression": impression,
+            "anatomy": [],
+            "confidence": "low",
+            "status": "review_needed",
+            "evidence": {"text": (impression or finding or t[:220]), "bbox": None, "page_index": 0, "source_backend": "rule-fallback"},
+        }
+    ]
 
 
 def _fallback_extract_observation_facts(source_file: str, panel_id: str, text: str) -> list[dict]:
@@ -113,8 +158,10 @@ def extract_medical_facts(file_texts: list[tuple[str, str]], *, mode: str = "aut
     """
     use_llm = mode == "llm" or (mode == "auto" and llm_available())
     observation_facts: list[dict] = []
+    diagnosis_facts: list[dict] = []
     document_facts: list[dict] = []
     panel_facts: list[dict] = []
+    conflict_facts: list[dict] = []
     for source_file, text in file_texts:
         if not (text or "").strip():
             continue
@@ -143,9 +190,12 @@ def extract_medical_facts(file_texts: list[tuple[str, str]], *, mode: str = "aut
                         "evidence": {"text": section[:180], "bbox": None, "page_index": 0},
                     }
                 )
-            facts = _llm_extract_observation_facts(source_file, panel_id, section) if use_llm else []
-            if facts:
-                for f in facts:
+            llm_facts = _llm_extract_facts(source_file, panel_id, section) if use_llm else {}
+            llm_obs = llm_facts.get("observation_facts", []) if isinstance(llm_facts, dict) else []
+            llm_dx = llm_facts.get("diagnosis_facts", []) if isinstance(llm_facts, dict) else []
+            llm_conf = llm_facts.get("conflict_facts", []) if isinstance(llm_facts, dict) else []
+            if llm_obs:
+                for f in llm_obs:
                     sf = source_file if not panel_id else f"{source_file}#panel{panel_id}"
                     observation_facts.append(
                         {
@@ -166,12 +216,50 @@ def extract_medical_facts(file_texts: list[tuple[str, str]], *, mode: str = "aut
                     )
             else:
                 observation_facts.extend(_fallback_extract_observation_facts(source_file, panel_id, section))
+            if llm_dx:
+                for d in llm_dx:
+                    sf = source_file if not panel_id else f"{source_file}#panel{panel_id}"
+                    diagnosis_facts.append(
+                        {
+                            "fact_type": "diagnosis_fact",
+                            "source_file": sf,
+                            "panel_id": f"panel_{panel_id}" if panel_id else "",
+                            "report_date": d.get("report_date") or _extract_date(section) or report_date,
+                            "study_type": d.get("study_type", "report"),
+                            "finding": d.get("finding", ""),
+                            "impression": d.get("impression", ""),
+                            "anatomy": d.get("anatomy", []) if isinstance(d.get("anatomy", []), list) else [],
+                            "confidence": d.get("confidence", "medium"),
+                            "status": "ok",
+                            "evidence": {"text": d.get("evidence_text", section[:220]), "bbox": None, "page_index": 0, "source_backend": "llm"},
+                        }
+                    )
+            else:
+                diagnosis_facts.extend(_fallback_extract_diagnosis_facts(source_file, panel_id, section))
+            if llm_conf:
+                for c in llm_conf:
+                    sf = source_file if not panel_id else f"{source_file}#panel{panel_id}"
+                    conflict_facts.append(
+                        {
+                            "fact_type": "conflict_fact",
+                            "source_file": sf,
+                            "panel_id": f"panel_{panel_id}" if panel_id else "",
+                            "report_date": c.get("report_date") or _extract_date(section) or report_date,
+                            "item_code": c.get("item_code", ""),
+                            "candidate_values": c.get("candidate_values", []),
+                            "conflict_type": c.get("conflict_type", "binding_conflict"),
+                            "status": "review_needed",
+                            "confidence": c.get("confidence", "low"),
+                            "evidence": {"text": c.get("evidence_text", section[:220]), "bbox": None, "page_index": 0, "source_backend": "llm"},
+                            "meta": {"reason": c.get("reason", "")},
+                        }
+                    )
     return {
         "document_facts": document_facts,
         "panel_facts": panel_facts,
         "observation_facts": observation_facts,
-        "diagnosis_facts": [],
-        "conflict_facts": [],
+        "diagnosis_facts": diagnosis_facts,
+        "conflict_facts": conflict_facts,
     }
 
 
@@ -213,4 +301,3 @@ def write_medical_facts(output_dir: Path, facts: dict) -> dict:
             for row in rows:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
     return {k: str(v.resolve()) for k, v in paths.items()}
-

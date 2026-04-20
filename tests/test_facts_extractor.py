@@ -40,3 +40,14 @@ def test_observation_facts_to_marker_records() -> None:
     )
     assert records and records[0]["marker_key"] == "ca19_9"
 
+
+def test_extract_medical_facts_contains_diagnosis_fallback() -> None:
+    text = """
+    报告日期：2026-04-28
+    检查所见：胰头不规则肿块，范围较前相仿。
+    影像诊断：腹膜网膜多发结节。
+    """
+    facts = extract_medical_facts([("raw/ct_report.png", text)], mode="rule")
+    dx = facts["diagnosis_facts"]
+    assert dx
+    assert "胰头不规则肿块" in (dx[0].get("finding") or "")
