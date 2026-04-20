@@ -23,7 +23,11 @@ from xyb.normalized import (
 )
 from xyb.export import to_html, to_json
 from xyb.report import generate
-from xyb.validation import validate_marker_records, write_validation_outputs
+from xyb.validation import (
+    resolve_conflicts_with_llm,
+    validate_marker_records,
+    write_validation_outputs,
+)
 
 
 def _id(prefix: str, *parts: str) -> str:
@@ -646,6 +650,23 @@ def process_path(
         marker_records,
         progress_cb=lambda i, t: _progress("validating", done=i, total=t),
     )
+    llm_conflict_resolutions: list[dict] = []
+    review_mode = os.getenv("XYB_CONFLICT_REVIEW", "auto").strip().lower()
+    should_review = review_mode in {"1", "true", "on", "yes"}
+    if review_mode == "auto":
+        should_review = bool(os.getenv("OPENAI_COMPAT_BASE_URL") and os.getenv("OPENAI_COMPAT_API_KEY") and os.getenv("OPENAI_COMPAT_MODEL"))
+    if should_review and validation_conflicts:
+        _progress("resolving validation conflicts...")
+        text_by_source = {sf: text for sf, text in file_texts_for_norm}
+        llm_conflict_resolutions = resolve_conflicts_with_llm(
+            validation_conflicts,
+            text_by_source=text_by_source,
+            progress_cb=lambda i, t: _progress("resolving", done=i, total=t),
+        )
+        (output_dir / "validation_resolutions.jsonl").write_text(
+            "\n".join(json.dumps(x, ensure_ascii=False) for x in llm_conflict_resolutions) + ("\n" if llm_conflict_resolutions else ""),
+            encoding="utf-8",
+        )
     validation_output = write_validation_outputs(
         output_dir,
         validated_rows,
@@ -653,6 +674,9 @@ def process_path(
         review_queue,
         validation_summary,
     )
+    if llm_conflict_resolutions:
+        validation_output["resolutions_file"] = str((output_dir / "validation_resolutions.jsonl").resolve())
+        validation_output["resolved_conflicts"] = sum(1 for r in llm_conflict_resolutions if isinstance(r.get("resolved_value"), (int, float)))
     # 失败文件追踪：主流程继续，失败文件落盘用于补跑收敛
     if mineru_failures:
         give_up_after = max(1, int(os.getenv("XYB_MINERU_GIVEUP_AFTER", "6")))

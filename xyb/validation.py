@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from typing import Any
+
+import requests
 
 
 def validate_marker_records(records: list[dict], *, progress_cb=None) -> tuple[list[dict], list[dict], list[dict], dict]:
@@ -103,3 +107,76 @@ def write_validation_outputs(output_dir: Path, validated: list[dict], conflicts:
         **summary,
     }
 
+
+def resolve_conflicts_with_llm(
+    conflicts: list[dict],
+    *,
+    text_by_source: dict[str, str],
+    progress_cb=None,
+) -> list[dict]:
+    """
+    对 conflict 条目进行 LLM 局部复核（文本级）。
+    仅在 OPENAI_COMPAT_* 可用时执行。
+    """
+    base_url = os.getenv("OPENAI_COMPAT_BASE_URL", "").rstrip("/")
+    api_key = os.getenv("OPENAI_COMPAT_API_KEY", "")
+    model = os.getenv("OPENAI_COMPAT_MODEL", "")
+    if not base_url or not api_key or not model:
+        return []
+
+    out: list[dict] = []
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    total = len(conflicts)
+    for i, c in enumerate(conflicts, start=1):
+        if progress_cb:
+            progress_cb(i, total)
+        source_file = str(c.get("source_file", ""))
+        marker_key = str(c.get("marker_key", ""))
+        date = str(c.get("date", ""))
+        values = c.get("values", [])
+        text = text_by_source.get(source_file, "")
+        prompt = (
+            "你是医疗检验单结构化复核助手。"
+            "请在给定文本中，只判断该 marker 的真实结果值（不是参考范围）。"
+            "若无法判断返回 null。"
+            "输出严格 JSON：{\"resolved_value\": number|null, \"reason\": string, \"confidence\": \"high|medium|low\"}"
+            f"\nmarker_key={marker_key}\ndate={date}\ncandidates={values}\ntext:\n{text[:3000]}"
+        )
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+        }
+        try:
+            r = requests.post(f"{base_url}/chat/completions", headers=headers, json=payload, timeout=90)
+            r.raise_for_status()
+            body = r.json()
+            content = str(body["choices"][0]["message"]["content"]).strip()
+            # 容错提取 json 对象
+            start = content.find("{")
+            end = content.rfind("}")
+            parsed = json.loads(content[start : end + 1]) if start >= 0 and end > start else {}
+            out.append(
+                {
+                    "source_file": source_file,
+                    "date": date,
+                    "marker_key": marker_key,
+                    "values": values,
+                    "resolved_value": parsed.get("resolved_value"),
+                    "reason": parsed.get("reason", ""),
+                    "confidence": parsed.get("confidence", "low"),
+                }
+            )
+        except Exception as exc:
+            out.append(
+                {
+                    "source_file": source_file,
+                    "date": date,
+                    "marker_key": marker_key,
+                    "values": values,
+                    "resolved_value": None,
+                    "reason": f"llm_error: {repr(exc)}",
+                    "confidence": "low",
+                }
+            )
+    return out
