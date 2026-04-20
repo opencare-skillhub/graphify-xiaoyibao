@@ -83,14 +83,14 @@ def build_parser() -> argparse.ArgumentParser:
     process_parser = subparsers.add_parser('process', help='medical-first processing pipeline (non-code + DICOM metadata)')
     process_parser.add_argument('path', help='directory to process')
     process_parser.add_argument('--follow-symlinks', action='store_true', help='follow symlinks while scanning')
-    process_parser.add_argument('--output-dir', default='xiaoyibao-out', help='directory to write graph/report artifacts')
+    process_parser.add_argument('--output-dir', default=None, help='directory to write graph/report artifacts (default: <project-root>/xiaoyibao-out)')
     process_parser.add_argument('--ocr-backend', choices=OCR_BACKENDS, default='auto', help='backend selection: auto|host-cli|multimodal|paddle-local|paddle-api|mineru-local|mineru-api|tesseract')
     process_parser.add_argument('--retry-failed-only', action='store_true', help='only retry files listed in xiaoyibao-out/ocr_failures_mineru.jsonl')
 
     full_parser = subparsers.add_parser('full-update', help='run process then markers-trend in one command')
     full_parser.add_argument('path', help='directory to process')
     full_parser.add_argument('--follow-symlinks', action='store_true', help='follow symlinks while scanning')
-    full_parser.add_argument('--output-dir', default='xiaoyibao-out', help='directory to write graph/report/trend artifacts')
+    full_parser.add_argument('--output-dir', default=None, help='directory to write graph/report/trend artifacts (default: <project-root>/xiaoyibao-out)')
     full_parser.add_argument('--ocr-backend', choices=OCR_BACKENDS, default='auto', help='backend selection: auto|host-cli|multimodal|paddle-local|paddle-api|mineru-local|mineru-api|tesseract')
     full_parser.add_argument('--retry-failed-only', action='store_true', help='only retry files listed in xiaoyibao-out/ocr_failures_mineru.jsonl')
     full_parser.add_argument(
@@ -214,6 +214,13 @@ def _detection_result_from_extraction(extraction: dict, fallback_root: str | Pat
     return result
 
 
+def _default_output_dir_for(path_arg: str | Path) -> Path:
+    p = Path(path_arg).resolve()
+    # 在 raw 目录执行时，默认把产物写到项目根目录下，避免写到 raw/xiaoyibao-out
+    root = p.parent if p.name.lower() == "raw" else p
+    return root / "xiaoyibao-out"
+
+
 def _medical_bucket_line(source_file: str) -> str:
     bucket = medical_bucket_for_path(source_file)
     return bucket or ''
@@ -305,9 +312,10 @@ def main() -> None:
         return
 
     if args.command == 'process':
+        out_dir = Path(args.output_dir) if args.output_dir else _default_output_dir_for(args.path)
         result = process_path(
             Path(args.path),
-            output_dir=Path(args.output_dir),
+            output_dir=out_dir,
             follow_symlinks=args.follow_symlinks,
             ocr_backend=args.ocr_backend,
             retry_failed_only=args.retry_failed_only,
@@ -316,9 +324,10 @@ def main() -> None:
         return
 
     if args.command == 'full-update':
+        out_dir = Path(args.output_dir) if args.output_dir else _default_output_dir_for(args.path)
         process_result = process_path(
             Path(args.path),
-            output_dir=Path(args.output_dir),
+            output_dir=out_dir,
             follow_symlinks=args.follow_symlinks,
             ocr_backend=args.ocr_backend,
             retry_failed_only=args.retry_failed_only,
@@ -326,8 +335,8 @@ def main() -> None:
         wanted = {s.strip().lower() for s in args.markers.split(',') if s.strip()}
         selected = [m for m in MARKERS if m.key in wanted] if wanted else MARKERS
         trend_result = generate_markers_trend(
-            graph_path=Path(args.output_dir) / 'graph.json',
-            output_dir=Path(args.output_dir),
+            graph_path=out_dir / 'graph.json',
+            output_dir=out_dir,
             markers=selected,
         )
         print(json.dumps({

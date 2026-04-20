@@ -643,6 +643,16 @@ def _read_image_text_mineru_api(path: Path) -> str:
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(tmpdir)
                 _debug_log("mineru-api zip names=", zf.namelist()[:50])
+            json_files = sorted(Path(tmpdir).rglob("*.json"))
+            # 优先 content_list/layout 的结构化文本，避免 full.md 把表格值错绑
+            for jf in json_files:
+                if "content_list" not in jf.name and "layout" not in jf.name:
+                    continue
+                content = jf.read_text(encoding="utf-8", errors="ignore").strip()
+                structured = _mineru_structured_text_from_json(content)
+                if structured:
+                    _mark_mineru_success()
+                    return structured
             md_files = sorted(Path(tmpdir).rglob("*.md"))
             texts: list[str] = []
             for md in md_files:
@@ -652,7 +662,6 @@ def _read_image_text_mineru_api(path: Path) -> str:
             if texts:
                 _mark_mineru_success()
                 return "\n\n".join(texts)
-            json_files = sorted(Path(tmpdir).rglob("*.json"))
             for jf in json_files:
                 content = jf.read_text(encoding="utf-8", errors="ignore").strip()
                 if content:
@@ -663,6 +672,84 @@ def _read_image_text_mineru_api(path: Path) -> str:
         _debug_log("mineru-api unzip/read exception=", repr(exc))
         return ""
     return ""
+
+
+def _mineru_structured_text_from_json(raw: str) -> str:
+    """
+    将 MinerU content_list/layout.json 重建为按页面+坐标排序的文本行，减少表格错位。
+    """
+    if not raw.strip():
+        return ""
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return ""
+
+    entries: list[tuple[int, float, float, str]] = []
+
+    def _add_item(page: int, bbox, text: str) -> None:
+        if not text or not isinstance(bbox, list) or len(bbox) < 4:
+            return
+        try:
+            x1, y1, x2, y2 = map(float, bbox[:4])
+            yc = (y1 + y2) / 2.0
+            entries.append((int(page), yc, x1, str(text).strip()))
+        except Exception:
+            return
+
+    if isinstance(obj, list):
+        for item in obj:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text", "")).strip()
+            _add_item(int(item.get("page_idx", 0)), item.get("bbox"), text)
+    elif isinstance(obj, dict):
+        # layout.json 结构
+        for page_idx, page in enumerate(obj.get("pdf_info", []) if isinstance(obj.get("pdf_info"), list) else []):
+            if not isinstance(page, dict):
+                continue
+            for block in page.get("preproc_blocks", []) if isinstance(page.get("preproc_blocks"), list) else []:
+                if not isinstance(block, dict):
+                    continue
+                if "text" in block:
+                    _add_item(page_idx, block.get("bbox"), str(block.get("text", "")).strip())
+                    continue
+                lines = block.get("lines", [])
+                if not isinstance(lines, list):
+                    continue
+                for ln in lines:
+                    if not isinstance(ln, dict):
+                        continue
+                    spans = ln.get("spans", [])
+                    if not isinstance(spans, list):
+                        continue
+                    text = "".join(str(sp.get("content", "")) for sp in spans if isinstance(sp, dict)).strip()
+                    _add_item(page_idx, ln.get("bbox"), text)
+
+    if not entries:
+        return ""
+    entries.sort(key=lambda x: (x[0], x[1], x[2]))
+
+    lines: list[str] = []
+    cur_page = entries[0][0]
+    cur_y = entries[0][1]
+    cur_parts: list[str] = [entries[0][3]]
+    y_tol = 14.0
+
+    for page, y, _x, text in entries[1:]:
+        if page != cur_page or abs(y - cur_y) > y_tol:
+            line = " ".join(p for p in cur_parts if p).strip()
+            if line:
+                lines.append(line)
+            cur_page = page
+            cur_y = y
+            cur_parts = [text]
+        else:
+            cur_parts.append(text)
+    line = " ".join(p for p in cur_parts if p).strip()
+    if line:
+        lines.append(line)
+    return "\n".join(lines).strip()
 
 
 def _read_image_text_tesseract(path: Path) -> str:

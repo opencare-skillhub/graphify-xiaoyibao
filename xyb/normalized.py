@@ -28,7 +28,6 @@ VALUE_PATTERN = re.compile(
 
 RESULT_HINTS = ("结果", "测定值", "检测值", "value", "result")
 REFERENCE_HINTS = ("参考", "范围", "区间", "normal", "ref", "上限", "下限")
-RANGE_PATTERN = re.compile(r"[0-9]+(?:[.,][0-9]+)?\s*[-~～—至]\s*[0-9]+(?:[.,][0-9]+)?", re.I)
 
 
 def file_fingerprint(path: Path) -> str:
@@ -64,27 +63,31 @@ def _has_reference_context(text: str) -> bool:
     return any(h in t for h in REFERENCE_HINTS)
 
 
-def _score_value_candidate(full_text: str, tail: str, vm: re.Match[str]) -> tuple[int, float, str] | None:
-    left = tail[max(0, vm.start() - 18): vm.start()]
-    right = tail[vm.end(): vm.end() + 18]
-    # “参考范围”在右侧很常见（例如 “结果 28.9 ... 参考 0-37”），不应误杀结果值
-    if _has_reference_context(left):
-        return None
-    # 落在明显区间表达中，视为参考范围，不取
-    span_left = tail[max(0, vm.start() - 8): vm.start()]
-    span_right = tail[vm.end(): vm.end() + 8]
-    if RANGE_PATTERN.search(f"{span_left}{vm.group(0)}{span_right}"):
+def _score_value_candidate(text: str, vm: re.Match[str], marker_start: int, marker_end: int) -> tuple[int, float, str] | None:
+    left = text[max(0, vm.start() - 20): vm.start()]
+    right = text[vm.end(): vm.end() + 20]
+    around = f"{left}{right}"
+    # 值若紧邻区间连接符（如 0-37），视为参考范围
+    span_left = text[max(0, vm.start() - 4): vm.start()]
+    span_right = text[vm.end(): vm.end() + 4]
+    if re.search(r"[-~～—至]\s*$", span_left) or re.search(r"^\s*[-~～—至]", span_right):
         return None
     try:
         value = float(str(vm.group(1)).replace(",", "."))
     except Exception:
         return None
     score = 0
-    ctx = full_text[max(0, full_text.find(tail) + vm.start() - 20): full_text.find(tail) + vm.start()].lower()
-    if any(h in ctx for h in RESULT_HINTS):
-        score += 3
     if vm.group(2):
         score += 1
+    if any(h in around.lower() for h in RESULT_HINTS):
+        score += 3
+    # 与 marker 越近越好；后侧值略优先，但允许前侧值（MinerU 常出现右列值在前）
+    if vm.start() >= marker_end:
+        score += 2
+    else:
+        score += 1
+    distance = min(abs(vm.start() - marker_start), abs(vm.end() - marker_end))
+    score -= int(distance / 20)
     if 0 <= value <= 100000:
         score += 1
     else:
@@ -92,10 +95,10 @@ def _score_value_candidate(full_text: str, tail: str, vm: re.Match[str]) -> tupl
     return score, value, _norm_unit(vm.group(2))
 
 
-def _pick_best_value(full_text: str, tail: str) -> tuple[float, str] | None:
+def _pick_best_value_near_marker(text: str, marker_start: int, marker_end: int) -> tuple[float, str] | None:
     best: tuple[int, float, str] | None = None
-    for vm in VALUE_PATTERN.finditer(tail):
-        cand = _score_value_candidate(full_text, tail, vm)
+    for vm in VALUE_PATTERN.finditer(text):
+        cand = _score_value_candidate(text, vm, marker_start, marker_end)
         if not cand:
             continue
         if best is None or cand[0] > best[0]:
@@ -115,8 +118,10 @@ def extract_marker_records_from_nodes(nodes: list[dict]) -> list[dict]:
             m = pat.search(label)
             if not m:
                 continue
-            tail = label[m.end(): m.end() + 48]
-            picked = _pick_best_value(label, tail)
+            left = max(0, m.start() - 24)
+            right = min(len(label), m.end() + 96)
+            window = label[left:right]
+            picked = _pick_best_value_near_marker(window, m.start() - left, m.end() - left)
             if not picked:
                 continue
             date = _extract_date(label, source_file, node_id)
@@ -155,11 +160,30 @@ def extract_marker_records_from_texts(file_texts: list[tuple[str, str]]) -> list
             nxt = lines[i + 1] if i + 1 < len(lines) else ""
             window = f"{line} {nxt}".replace(",", ".")
             for key, marker_label, pat in MARKER_REGEX:
-                m = pat.search(window)
-                if not m:
-                    continue
-                tail = window[m.end(): m.end() + 64]
-                picked = _pick_best_value(window, tail)
+                picked: tuple[float, str] | None = None
+                m_line = pat.search(line)
+                if m_line:
+                    line_norm = line.replace(",", ".")
+                    left = max(0, m_line.start() - 24)
+                    right = min(len(line_norm), m_line.end() + 96)
+                    near = line_norm[left:right]
+                    picked = _pick_best_value_near_marker(near, m_line.start() - left, m_line.end() - left)
+                if not picked:
+                    m_nxt = pat.search(nxt)
+                    if m_nxt:
+                        nxt_norm = nxt.replace(",", ".")
+                        left = max(0, m_nxt.start() - 24)
+                        right = min(len(nxt_norm), m_nxt.end() + 96)
+                        near = nxt_norm[left:right]
+                        picked = _pick_best_value_near_marker(near, m_nxt.start() - left, m_nxt.end() - left)
+                if not picked:
+                    m = pat.search(window)
+                    if not m:
+                        continue
+                    left = max(0, m.start() - 24)
+                    right = min(len(window), m.end() + 96)
+                    near = window[left:right]
+                    picked = _pick_best_value_near_marker(near, m.start() - left, m.end() - left)
                 if not picked:
                     continue
                 rows.append(

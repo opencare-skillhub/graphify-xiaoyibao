@@ -42,12 +42,20 @@ def _extract_text_from_zip_bytes(content: bytes) -> str:
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
             names = zf.namelist()
             _debug("zip names", names[:10])
+            json_names = [n for n in names if n.lower().endswith(".json")]
+            # 优先 content_list/layout 的结构化文本（比 full.md 更稳，减少表格错位）
+            for n in json_names:
+                if "content_list" not in n and "layout" not in n:
+                    continue
+                text = zf.read(n).decode("utf-8", errors="ignore").strip()
+                structured = _mineru_structured_text_from_json(text)
+                if structured:
+                    return structured
             md_names = [n for n in names if n.lower().endswith(".md")]
             for n in md_names:
                 text = zf.read(n).decode("utf-8", errors="ignore").strip()
                 if text:
                     return text
-            json_names = [n for n in names if n.lower().endswith(".json")]
             for n in json_names:
                 text = zf.read(n).decode("utf-8", errors="ignore").strip()
                 if text:
@@ -55,6 +63,77 @@ def _extract_text_from_zip_bytes(content: bytes) -> str:
     except Exception as exc:  # pragma: no cover
         _debug("zip parse error", repr(exc))
     return ""
+
+
+def _mineru_structured_text_from_json(raw: str) -> str:
+    if not raw.strip():
+        return ""
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return ""
+
+    entries: list[tuple[int, float, float, str]] = []
+
+    def _add_item(page: int, bbox, text: str) -> None:
+        if not text or not isinstance(bbox, list) or len(bbox) < 4:
+            return
+        try:
+            x1, y1, x2, y2 = map(float, bbox[:4])
+            yc = (y1 + y2) / 2.0
+            entries.append((int(page), yc, x1, str(text).strip()))
+        except Exception:
+            return
+
+    if isinstance(obj, list):
+        for item in obj:
+            if not isinstance(item, dict):
+                continue
+            _add_item(int(item.get("page_idx", 0)), item.get("bbox"), str(item.get("text", "")).strip())
+    elif isinstance(obj, dict):
+        pdf_info = obj.get("pdf_info", [])
+        if isinstance(pdf_info, list):
+            for page_idx, page in enumerate(pdf_info):
+                if not isinstance(page, dict):
+                    continue
+                for block in page.get("preproc_blocks", []) if isinstance(page.get("preproc_blocks"), list) else []:
+                    if not isinstance(block, dict):
+                        continue
+                    if "text" in block:
+                        _add_item(page_idx, block.get("bbox"), str(block.get("text", "")).strip())
+                        continue
+                    lines = block.get("lines", [])
+                    if not isinstance(lines, list):
+                        continue
+                    for ln in lines:
+                        if not isinstance(ln, dict):
+                            continue
+                        spans = ln.get("spans", [])
+                        if not isinstance(spans, list):
+                            continue
+                        text = "".join(str(sp.get("content", "")) for sp in spans if isinstance(sp, dict)).strip()
+                        _add_item(page_idx, ln.get("bbox"), text)
+
+    if not entries:
+        return ""
+    entries.sort(key=lambda x: (x[0], x[1], x[2]))
+    y_tol = 14.0
+    out_lines: list[str] = []
+    cur_page, cur_y, _x, first_text = entries[0]
+    cur_parts = [first_text]
+    for page, y, _x, text in entries[1:]:
+        if page != cur_page or abs(y - cur_y) > y_tol:
+            line = " ".join(p for p in cur_parts if p).strip()
+            if line:
+                out_lines.append(line)
+            cur_page, cur_y = page, y
+            cur_parts = [text]
+        else:
+            cur_parts.append(text)
+    line = " ".join(p for p in cur_parts if p).strip()
+    if line:
+        out_lines.append(line)
+    return "\n".join(out_lines).strip()
 
 
 def extract_images_batch(image_paths: list[Path]) -> tuple[dict[str, str], list[dict]]:

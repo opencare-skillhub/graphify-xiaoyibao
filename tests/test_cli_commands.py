@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -224,6 +225,23 @@ def test_process_command_accepts_ocr_backend(monkeypatch: pytest.MonkeyPatch, ca
     capsys.readouterr()
     assert called['process'][3] == 'paddle-local'
     assert called['process'][4] is False
+
+
+def test_process_default_output_dir_uses_project_root_when_path_is_raw(monkeypatch: pytest.MonkeyPatch, capsys, tmp_path) -> None:
+    called = {}
+    raw_dir = tmp_path / 'raw'
+    raw_dir.mkdir()
+
+    def fake_process(path, output_dir, follow_symlinks=False, ocr_backend='auto', retry_failed_only=False):
+        called['process'] = (Path(path), Path(output_dir))
+        return {'nodes': 1, 'edges': 0}
+
+    monkeypatch.setattr(cli, 'process_path', fake_process, raising=False)
+    monkeypatch.setattr(sys, 'argv', ['xyb', 'process', str(raw_dir)])
+    cli.main()
+    capsys.readouterr()
+
+    assert called['process'][1] == (tmp_path / 'xiaoyibao-out')
 
 
 def test_path_command_prints_shortest_path(tmp_path) -> None:
