@@ -18,9 +18,9 @@ from xyb.mineru_batch import extract_images_batch
 from xyb.ocr import read_image_text
 from xyb.normalized import (
     extract_marker_records_from_nodes,
-    extract_marker_records_from_texts,
     write_normalized_markers,
 )
+from xyb.facts_extractor import extract_medical_facts, observation_facts_to_marker_records, write_medical_facts
 from xyb.export import to_html, to_json
 from xyb.report import generate
 from xyb.validation import (
@@ -637,8 +637,11 @@ def process_path(
     save_manifest(detection.get("files", {}), str(output_dir / "manifest.json"))
 
     current_files = {f for fl in detection.get("files", {}).values() for f in fl}
-    _progress("extracting marker records...")
-    text_marker_records = extract_marker_records_from_texts(file_texts_for_norm)
+    _progress("extracting medical facts...")
+    extractor_mode = os.getenv("XYB_FACTS_EXTRACTOR_MODE", "auto").strip().lower() or "auto"
+    facts = extract_medical_facts(file_texts_for_norm, mode=extractor_mode)
+    facts_files = write_medical_facts(output_dir, facts)
+    text_marker_records = observation_facts_to_marker_records(facts.get("observation_facts", []))
     node_marker_records = extract_marker_records_from_nodes(extraction["nodes"])
     # 以文本直抽为主（更能区分“结果值 vs 参考范围”），节点抽取仅补充文本未覆盖文件
     text_sources = {str(r.get("source_file", "")) for r in text_marker_records}
@@ -747,6 +750,7 @@ def process_path(
             "failed_file_list": str(process_failure_file.resolve()) if file_failures else None,
         },
         "validation": validation_output,
+        "facts": {"mode": extractor_mode, **facts_files},
         "log_file": str(log_file.resolve()),
     }
     summary_file.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
