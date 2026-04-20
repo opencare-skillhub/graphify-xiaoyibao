@@ -390,6 +390,9 @@ def process_path(
             print(line, file=sys.stderr, flush=True)
 
     _log("INFO", "process start", root=str(path), output_dir=str(output_dir), ocr_backend=ocr_backend)
+    # 供 OCR 层（如 mineru-local）落地可复用转换产物使用
+    os.environ["XYB_WORKSPACE_ROOT"] = str(path.resolve())
+    os.environ["XYB_OUTPUT_DIR"] = str(output_dir.resolve())
     _progress("detecting files...")
     detection = detect(path, follow_symlinks=follow_symlinks)
     total_files = sum(len(v) for v in detection.get("files", {}).values())

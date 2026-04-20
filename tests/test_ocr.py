@@ -47,6 +47,7 @@ def test_read_image_text_mineru_local_reads_markdown(monkeypatch: pytest.MonkeyP
     image = tmp_path / "a.png"
     image.write_bytes(b"fake")
 
+    monkeypatch.setenv("XYB_MINERU_LOCAL_MODE", "cli")
     monkeypatch.setattr(ocr.shutil, "which", lambda name: "/usr/local/bin/mineru" if name == "mineru" else None)
 
     class FakeTmpDir:
@@ -71,6 +72,103 @@ def test_read_image_text_mineru_local_reads_markdown(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(ocr.subprocess, "run", lambda *args, **kwargs: FakeProc())
     assert ocr._read_image_text_mineru(image) == "mineru markdown"
+
+
+def test_backend_available_mineru_local_accepts_tianshu_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    backend_dir = tmp_path / "mineru-tianshu" / "backend" / "mineru_pipeline"
+    backend_dir.mkdir(parents=True)
+    (backend_dir / "engine.py").write_text("# fake", encoding="utf-8")
+
+    monkeypatch.setenv("XYB_MINERU_TIANSHU_DIR", str(tmp_path / "mineru-tianshu" / "backend"))
+    monkeypatch.setattr(ocr.shutil, "which", lambda _: None)
+    monkeypatch.setattr(ocr.importlib.util, "find_spec", lambda _: None)
+
+    assert ocr.backend_available("mineru-local") is True
+
+
+def test_read_image_text_mineru_local_prefers_tianshu_then_fallback_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    image = tmp_path / "a.png"
+    image.write_bytes(b"fake")
+
+    calls: list[str] = []
+
+    def fake_tianshu(_path: Path) -> str:
+        calls.append("tianshu")
+        return ""
+
+    def fake_cli(_path: Path) -> str:
+        calls.append("cli")
+        return "cli-result"
+
+    monkeypatch.setenv("XYB_MINERU_LOCAL_MODE", "auto")
+    monkeypatch.setattr(ocr, "_read_image_text_mineru_tianshu", fake_tianshu)
+    monkeypatch.setattr(ocr, "_read_image_text_mineru_cli", fake_cli)
+
+    assert ocr._read_image_text_mineru(image) == "cli-result"
+    assert calls == ["tianshu", "cli"]
+
+
+def test_resolve_mineru_local_device_auto_on_non_darwin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XYB_MINERU_LOCAL_DEVICE", "auto")
+    monkeypatch.setattr(ocr.platform, "system", lambda: "Linux")
+    assert ocr._resolve_mineru_local_device() == "cpu"
+
+
+def test_resolve_mineru_local_device_prefers_mps_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XYB_MINERU_LOCAL_DEVICE", "auto")
+    monkeypatch.setattr(ocr.platform, "system", lambda: "Darwin")
+
+    class FakeMPS:
+        @staticmethod
+        def is_available():
+            return True
+
+    class FakeTorch:
+        class backends:  # noqa: N801
+            mps = FakeMPS()
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "torch":
+            return FakeTorch()
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert ocr._resolve_mineru_local_device() == "mps"
+
+
+def test_mineru_converted_cache_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    src = tmp_path / "raw" / "a.png"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"fake-image")
+
+    tmp_out = tmp_path / "tmp_mineru"
+    tmp_out.mkdir(parents=True, exist_ok=True)
+    (tmp_out / "out.md").write_text("mineru markdown", encoding="utf-8")
+
+    conv_root = tmp_path / "mineru_converted"
+    monkeypatch.setenv("XYB_MINERU_CONVERTED_DIR", str(conv_root))
+    monkeypatch.setenv("XYB_WORKSPACE_ROOT", str(tmp_path))
+
+    ocr._persist_mineru_converted(src, tmp_out, "提取文本", backend="mineru-local-tianshu", device="cpu")
+    assert ocr._read_cached_mineru_text(src) == "提取文本"
+
+
+def test_mineru_converted_import_legacy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    legacy = tmp_path / "legacy_mineru" / "files" / "aa" / "bb"
+    legacy.mkdir(parents=True, exist_ok=True)
+    (legacy / "extracted_text.txt").write_text("legacy-text", encoding="utf-8")
+
+    dst = tmp_path / "new_mineru"
+    monkeypatch.setenv("XYB_MINERU_CONVERTED_IMPORT_DIR", str(tmp_path / "legacy_mineru"))
+    monkeypatch.setenv("XYB_MINERU_CONVERTED_DIR", str(dst))
+    # force a call path
+    ocr._import_legacy_mineru_converted(dst)
+
+    assert (dst / "files" / "aa" / "bb" / "extracted_text.txt").read_text(encoding="utf-8") == "legacy-text"
 
 
 def test_read_image_text_paddle_api_not_implemented(tmp_path: Path) -> None:

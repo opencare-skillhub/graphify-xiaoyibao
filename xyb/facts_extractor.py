@@ -17,6 +17,20 @@ _DATE_PATTERNS = [
     re.compile(r"(20\d{2})(\d{2})(\d{2})"),
 ]
 
+_OBS_MARKERS: list[tuple[str, str, re.Pattern[str]]] = [
+    ("cea", "CEA", re.compile(r"\bcea\b|癌胚抗原", re.I)),
+    ("afp", "AFP", re.compile(r"\bafp\b|甲胎蛋白", re.I)),
+    ("ca125", "CA125", re.compile(r"ca\s*125\b|糖[链类]抗原\s*(?:ca\s*)?125", re.I)),
+    ("ca19_9", "CA19-9", re.compile(r"(?:ca\s*)?19\s*-?\s*9|糖[链类]抗原\s*19\s*-?\s*9", re.I)),
+    ("ca50", "CA50", re.compile(r"ca\s*50\b|糖[链类]抗原\s*50", re.I)),
+    ("ca72_4", "CA72-4", re.compile(r"ca\s*72\s*-?\s*4|糖[链类]抗原\s*72\s*-?\s*4", re.I)),
+    ("ca242", "CA242", re.compile(r"ca\s*242\b|糖[链类]抗原\s*242", re.I)),
+]
+
+_VALUE_UNIT_RE = re.compile(r"([0-9]+(?:[.,][0-9]+)?)\s*(U/mL|IU/mL|ng/mL|ng/ml|pg/mL|pg/ml|umol/l|mmol/l)?", re.I)
+_RANGE_HINT_RE = re.compile(r"参考值|范围|区间|normal|ref", re.I)
+_RANGE_NEAR_RE = re.compile(r"[-~～—至]")
+
 
 def _extract_date(text: str) -> str | None:
     for pat in _DATE_PATTERNS:
@@ -129,8 +143,31 @@ def _fallback_extract_diagnosis_facts(source_file: str, panel_id: str, text: str
 
 def _fallback_extract_observation_facts(source_file: str, panel_id: str, text: str) -> list[dict]:
     source = source_file if not panel_id else f"{source_file}#panel{panel_id}"
-    rows = extract_marker_records_from_texts([(source, text)])
+    date = _extract_date(text or "")
+    parsed = _extract_observations_linewise(text)
     out: list[dict] = []
+    for item in parsed:
+        out.append(
+            {
+                "fact_type": "observation_fact",
+                "source_file": source,
+                "panel_id": f"panel_{panel_id}" if panel_id else "",
+                "report_date": date,
+                "item_code": item["item_code"],
+                "item_name": item["item_name"],
+                "value": item["value"],
+                "unit": item["unit"],
+                "reference_range": "",
+                "abnormal_flag": "unknown",
+                "confidence": "medium",
+                "status": "ok",
+                "evidence": {"text": item["evidence"], "bbox": None, "page_index": 0, "source_backend": "rule-fallback"},
+            }
+        )
+    # 若行级绑定完全失败，回退到旧规则，避免空结果
+    if out:
+        return out
+    rows = extract_marker_records_from_texts([(source, text)])
     for r in rows:
         out.append(
             {
@@ -144,12 +181,88 @@ def _fallback_extract_observation_facts(source_file: str, panel_id: str, text: s
                 "unit": r.get("unit"),
                 "reference_range": "",
                 "abnormal_flag": "unknown",
-                "confidence": "medium",
-                "status": "ok",
-                "evidence": {"text": text[:300], "bbox": None, "page_index": 0, "source_backend": "rule-fallback"},
+                "confidence": "low",
+                "status": "review_needed",
+                "evidence": {"text": text[:300], "bbox": None, "page_index": 0, "source_backend": "rule-legacy-fallback"},
             }
         )
     return out
+
+
+def _norm_unit(unit: str | None) -> str:
+    u = (unit or "").strip()
+    if not u:
+        return "U/mL"
+    u = u.replace("U/ml", "U/mL").replace("u/ml", "U/mL").replace("ng/ml", "ng/mL").replace("pg/ml", "pg/mL")
+    return u
+
+
+def _extract_value_from_line(line: str) -> tuple[float, str] | None:
+    if not line:
+        return None
+    for m in _VALUE_UNIT_RE.finditer(line):
+        raw_v = str(m.group(1)).replace(",", ".")
+        try:
+            v = float(raw_v)
+        except Exception:
+            continue
+        s, e = m.start(), m.end()
+        left = line[max(0, s - 3):s]
+        right = line[e : e + 3]
+        # 过滤区间值（如 0-27）
+        if _RANGE_NEAR_RE.search(left) or _RANGE_NEAR_RE.search(right):
+            continue
+        if 0 <= v <= 100000:
+            return v, _norm_unit(m.group(2))
+    return None
+
+
+def _extract_observations_linewise(text: str) -> list[dict]:
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    out: list[dict] = []
+    for i, line in enumerate(lines):
+        for item_code, item_name, pat in _OBS_MARKERS:
+            m = pat.search(line)
+            if not m:
+                continue
+            value: tuple[float, str] | None = None
+            evidence = line
+            # 1) 同行优先：取 marker 后、"参考值" 前的值（适配“甲胎蛋白3.04ng/ml 参考值...”）
+            seg = line[m.end() :]
+            if "参考" in seg:
+                seg = seg.split("参考", 1)[0]
+            value = _extract_value_from_line(seg)
+            # 2) 若同行没值，尝试后续 1~3 行，跳过参考值行
+            if not value:
+                for j in range(i + 1, min(i + 4, len(lines))):
+                    ln = lines[j]
+                    if any(pat2.search(ln) for _, _, pat2 in _OBS_MARKERS):
+                        break
+                    if _RANGE_HINT_RE.search(ln):
+                        continue
+                    v = _extract_value_from_line(ln)
+                    if v:
+                        value = v
+                        evidence = f"{line} | {ln}"
+                        break
+            if not value:
+                continue
+            out.append(
+                {
+                    "item_code": item_code,
+                    "item_name": item_name,
+                    "value": value[0],
+                    "unit": value[1],
+                    "evidence": evidence[:300],
+                }
+            )
+            break
+    # 去重：同 item_code 保留出现顺序下的唯一值，避免重复行
+    dedup: dict[tuple[str, float, str], dict] = {}
+    for row in out:
+        key = (row["item_code"], float(row["value"]), row["unit"])
+        dedup.setdefault(key, row)
+    return list(dedup.values())
 
 
 def extract_medical_facts(file_texts: list[tuple[str, str]], *, mode: str = "auto") -> dict:

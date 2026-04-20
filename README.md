@@ -197,7 +197,7 @@ xyb full-update <path> --output-dir ./xiaoyibao-out
 
 - `paddle-local`：本地 PaddleOCR，隐私优先
 - `paddle-api`：PaddleOCR 在线 API / layout parsing
-- `mineru-local`：本地 MinerU CLI / 本地解析，性能要求较高
+- `mineru-local`：本地 MinerU（优先走 `mineru-tianshu` backend，可回退 MinerU CLI）
 - `mineru-api`：MinerU 远程 API
 - `tesseract`：本地兜底 OCR
 
@@ -220,6 +220,26 @@ export PADDLEOCR_API_MODEL="PaddleOCR-VL-1.5"
 ```bash
 export MINERU_API_BASE_URL="https://mineru.net"
 export MINERU_API_TOKEN="your-token"
+```
+
+若使用 `mineru-local` 的 tianshu 后端（推荐）：
+
+```bash
+export XYB_MINERU_LOCAL_MODE="auto"      # auto|tianshu|cli
+export XYB_MINERU_TIANSHU_DIR="/path/to/mineru-tianshu/backend"
+export XYB_MINERU_LOCAL_DEVICE="auto"    # macOS 自动尝试 mps，失败自动回退 cpu
+export XYB_MINERU_LOCAL_LANG="ch"
+# 可选：自定义转换产物落盘目录（默认 <workspace>/mineru_converted）
+# export XYB_MINERU_CONVERTED_DIR="/path/to/mineru_converted"
+```
+
+`mineru-local` 会把转换产物与提取文本持久化到 `<workspace>/mineru_converted/files/...`。  
+后续同文件（内容未变）会命中缓存，按增量复用，便于审计与补跑。
+
+如需把旧缓存迁移过来，可配置：
+
+```bash
+export XYB_MINERU_CONVERTED_IMPORT_DIR="/old/mineru_converted:/another/legacy_dir"
 ```
 
 若使用多模态主链（OpenAI-compatible），请配置：

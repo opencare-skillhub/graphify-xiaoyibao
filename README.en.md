@@ -194,7 +194,7 @@ Recommended backend semantics:
 
 - `paddle-local`: local PaddleOCR, privacy-first
 - `paddle-api`: PaddleOCR online API / layout parsing
-- `mineru-local`: local MinerU CLI / local parsing, higher performance requirements
+- `mineru-local`: local MinerU (prefer `mineru-tianshu` backend, fallback to MinerU CLI)
 - `mineru-api`: remote MinerU API
 - `tesseract`: local fallback OCR
 
@@ -217,6 +217,27 @@ If you use `mineru-api`, configure:
 ```bash
 export MINERU_API_BASE_URL="https://mineru.net"
 export MINERU_API_TOKEN="your-token"
+```
+
+If you use `mineru-local` with the tianshu backend (recommended):
+
+```bash
+export XYB_MINERU_LOCAL_MODE="auto"      # auto|tianshu|cli
+export XYB_MINERU_TIANSHU_DIR="/path/to/mineru-tianshu/backend"
+export XYB_MINERU_LOCAL_DEVICE="auto"    # on macOS: try mps first, fallback to cpu
+export XYB_MINERU_LOCAL_LANG="ch"
+# Optional: custom persistent conversion directory (default: <workspace>/mineru_converted)
+# export XYB_MINERU_CONVERTED_DIR="/path/to/mineru_converted"
+```
+
+`mineru-local` now persists conversion artifacts and extracted text under
+`<workspace>/mineru_converted/files/...`.  
+Unchanged files will hit this cache in later runs (incremental reuse + audit trace).
+
+To import old cache directories, set:
+
+```bash
+export XYB_MINERU_CONVERTED_IMPORT_DIR="/old/mineru_converted:/another/legacy_dir"
 ```
 
 If you use the multimodal primary path (OpenAI-compatible), configure:

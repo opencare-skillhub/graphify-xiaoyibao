@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import platform
 import re
+import hashlib
 import shutil
 import shlex
 import subprocess
+import sys
 import tempfile
 import json
 import time
@@ -45,6 +48,7 @@ _MINERU_FAIL_COUNT = 0
 _MINERU_DISABLED = False
 _PADDLE_FAIL_COUNT = 0
 _PADDLE_DISABLED = False
+_MINERU_LEGACY_IMPORTED: set[str] = set()
 
 
 def _mineru_failure_limit() -> int:
@@ -159,7 +163,7 @@ def backend_available(name: str) -> bool:
             return False
         return bool(os.getenv("PADDLEOCR_API_TOKEN")) and bool(os.getenv("PADDLEOCR_API_URL"))
     if name == "mineru-local":
-        return shutil.which("mineru") is not None or importlib.util.find_spec("mineru") is not None
+        return _tianshu_backend_available() or shutil.which("mineru") is not None or importlib.util.find_spec("mineru") is not None
     if name == "mineru-api":
         if _MINERU_DISABLED:
             return False
@@ -396,6 +400,189 @@ def _get_paddle_ocr():
 
 
 def _read_image_text_mineru(path: Path) -> str:
+    mode = os.getenv("XYB_MINERU_LOCAL_MODE", "auto").strip().lower()
+    if mode in {"", "default"}:
+        mode = "auto"
+
+    if mode in {"auto", "tianshu"}:
+        text = _read_image_text_mineru_tianshu(path)
+        if text.strip():
+            return text
+        if mode == "tianshu":
+            return ""
+
+    if mode in {"auto", "cli"}:
+        return _read_image_text_mineru_cli(path)
+
+    return ""
+
+
+def _tianshu_backend_available() -> bool:
+    backend_dir = _find_tianshu_backend_dir()
+    if not backend_dir:
+        return False
+    return (backend_dir / "mineru_pipeline" / "engine.py").exists()
+
+
+def _find_tianshu_backend_dir() -> Path | None:
+    env_dir = os.getenv("XYB_MINERU_TIANSHU_DIR", "").strip()
+    candidates: list[Path] = []
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser())
+    repo_root = Path(__file__).resolve().parent.parent
+    candidates.extend(
+        [
+            Path.cwd() / "mineru-tianshu" / "backend",
+            repo_root / "mineru-tianshu" / "backend",
+        ]
+    )
+    for c in candidates:
+        try:
+            p = c.resolve()
+        except Exception:
+            p = c
+        if p.exists() and p.is_dir() and (p / "mineru_pipeline" / "engine.py").exists():
+            return p
+    return None
+
+
+def _read_image_text_mineru_tianshu(path: Path) -> str:
+    backend_dir = _find_tianshu_backend_dir()
+    if not backend_dir:
+        return ""
+    _prepare_mineru_local_runtime_env()
+    cached = _read_cached_mineru_text(path)
+    if cached.strip():
+        _debug_log("mineru-local cache hit", path.name, "chars=", len(cached))
+        return cached
+
+    inserted = False
+    if str(backend_dir) not in sys.path:
+        sys.path.insert(0, str(backend_dir))
+        inserted = True
+
+    try:
+        from mineru_pipeline.engine import MinerUPipelineEngine  # type: ignore
+
+        device = _resolve_mineru_local_device()
+        lang = os.getenv("XYB_MINERU_LOCAL_LANG", "ch").strip() or "ch"
+        table_enable = os.getenv("XYB_MINERU_LOCAL_TABLE_ENABLE", "1").strip().lower() not in {"0", "false", "no", "off"}
+        formula_enable = os.getenv("XYB_MINERU_LOCAL_FORMULA_ENABLE", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+        def _run_once(target_device: str) -> str:
+            engine = MinerUPipelineEngine(device=target_device)
+            with tempfile.TemporaryDirectory(prefix="xyb-mineru-local-") as tmpdir:
+                result = engine.parse(
+                    str(path),
+                    tmpdir,
+                    options={
+                        "lang": lang,
+                        "table_enable": table_enable,
+                        "formula_enable": formula_enable,
+                    },
+                )
+                text = str((result or {}).get("markdown", "")).strip()
+                if text:
+                    _persist_mineru_converted(path, Path(tmpdir), text, backend="mineru-local-tianshu", device=target_device)
+                    _debug_log("mineru-local tianshu success", path.name, "device=", target_device, "chars=", len(text))
+                    return text
+                md_files = sorted(Path(tmpdir).rglob("*.md"))
+                texts: list[str] = []
+                for md in md_files:
+                    content = md.read_text(encoding="utf-8", errors="ignore").strip()
+                    if content:
+                        texts.append(content)
+                if texts:
+                    merged = "\n\n".join(texts)
+                    _persist_mineru_converted(path, Path(tmpdir), merged, backend="mineru-local-tianshu", device=target_device)
+                    _debug_log("mineru-local tianshu md fallback", path.name, "device=", target_device, "chars=", len(merged))
+                    return merged
+            return ""
+
+        try:
+            return _run_once(device)
+        except Exception as exc:
+            if str(device).lower().startswith("mps"):
+                _debug_log("mineru-local mps failed, fallback cpu", repr(exc))
+                try:
+                    return _run_once("cpu")
+                except Exception as cpu_exc:
+                    _debug_log("mineru-local cpu fallback failed", repr(cpu_exc))
+                    return ""
+            raise
+    except Exception as exc:
+        _debug_log("mineru-local tianshu exception=", repr(exc))
+        return ""
+    finally:
+        if inserted:
+            try:
+                sys.path.remove(str(backend_dir))
+            except Exception:
+                pass
+
+    return ""
+
+
+def _resolve_mineru_local_device() -> str:
+    raw = os.getenv("XYB_MINERU_LOCAL_DEVICE", "auto").strip().lower() or "auto"
+    if raw not in {"auto", "default"}:
+        return raw
+    if platform.system().lower() != "darwin":
+        return "cpu"
+    try:
+        import torch  # type: ignore
+
+        mps = getattr(getattr(torch, "backends", object()), "mps", None)
+        if mps is not None and callable(getattr(mps, "is_available", None)) and mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def _prepare_mineru_local_runtime_env() -> None:
+    """
+    为 macOS 本地 MinerU 提供可写缓存目录，避免权限问题导致空结果。
+    """
+    tmp_root = Path(tempfile.gettempdir()) / "xyb-mineru-local-runtime"
+    try:
+        tmp_root.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+
+    defaults = {
+        "HF_HOME": (Path.home() / ".cache" / "huggingface", Path(tmp_root / "hf_home")),
+        "MPLCONFIGDIR": (Path.home() / ".matplotlib", Path(tmp_root / "mpl_cfg")),
+        "YOLO_CONFIG_DIR": (Path.home() / "Library" / "Application Support" / "Ultralytics", Path(tmp_root / "ultra_cfg")),
+        "XDG_CACHE_HOME": (Path.home() / ".cache", Path(tmp_root / "xdg_cache")),
+    }
+    for key, (preferred, fallback) in defaults.items():
+        if os.getenv(key):
+            continue
+        target = preferred if _is_path_writable(preferred) else fallback
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            os.environ[key] = str(target)
+        except Exception:
+            continue
+
+
+def _is_path_writable(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".xyb_write_probe"
+        probe.write_text("1", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def _read_image_text_mineru_cli(path: Path) -> str:
+    cached = _read_cached_mineru_text(path)
+    if cached.strip():
+        _debug_log("mineru-local cache hit", path.name, "chars=", len(cached))
+        return cached
     if shutil.which("mineru") is None:
         raise RuntimeError("MinerU CLI is not available in the current environment")
 
@@ -416,7 +603,9 @@ def _read_image_text_mineru(path: Path) -> str:
                 if content:
                     texts.append(content)
             if texts:
-                return "\n\n".join(texts)
+                merged = "\n\n".join(texts)
+                _persist_mineru_converted(path, Path(tmpdir), merged, backend="mineru-local-cli", device="cpu")
+                return merged
 
         json_files = sorted(Path(tmpdir).rglob("*.json"))
         for jf in json_files:
@@ -425,9 +614,140 @@ def _read_image_text_mineru(path: Path) -> str:
             except Exception:
                 content = ""
             if content:
+                _persist_mineru_converted(path, Path(tmpdir), content, backend="mineru-local-cli", device="cpu")
                 return content
 
     return ""
+
+
+def _resolve_workspace_root_for_mineru(path: Path) -> Path:
+    env_root = os.getenv("XYB_WORKSPACE_ROOT", "").strip()
+    if env_root:
+        return Path(env_root).expanduser()
+    p = path.resolve()
+    if p.parent.name.lower() == "raw":
+        return p.parent.parent
+    return Path.cwd()
+
+
+def _resolve_mineru_converted_root(path: Path) -> Path:
+    env_dir = os.getenv("XYB_MINERU_CONVERTED_DIR", "").strip()
+    root = Path(env_dir).expanduser() if env_dir else (_resolve_workspace_root_for_mineru(path) / "mineru_converted")
+    _import_legacy_mineru_converted(root)
+    return root
+
+
+def _mineru_source_hash(path: Path) -> str:
+    src = str(path.resolve())
+    return hashlib.sha1(src.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+
+def _mineru_fingerprint(path: Path) -> str:
+    try:
+        st = path.stat()
+        payload = f"{path.resolve()}|{st.st_size}|{st.st_mtime_ns}"
+    except Exception:
+        payload = str(path.resolve())
+    return hashlib.sha1(payload.encode("utf-8", errors="ignore")).hexdigest()[:20]
+
+
+def _read_cached_mineru_text(path: Path) -> str:
+    root = _resolve_mineru_converted_root(path)
+    fp = _mineru_fingerprint(path)
+    sh = _mineru_source_hash(path)
+    text_file = root / "files" / sh / fp / "extracted_text.txt"
+    if not text_file.exists():
+        return ""
+    try:
+        return text_file.read_text(encoding="utf-8", errors="ignore").strip()
+    except Exception:
+        return ""
+
+
+def _persist_mineru_converted(path: Path, tmpdir: Path, text: str, *, backend: str, device: str) -> None:
+    if not text.strip():
+        return
+    root = _resolve_mineru_converted_root(path)
+    fp = _mineru_fingerprint(path)
+    sh = _mineru_source_hash(path)
+    target = root / "files" / sh / fp
+    if target.exists():
+        return
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        src = path.resolve()
+        rel = None
+        ws = _resolve_workspace_root_for_mineru(path).resolve()
+        try:
+            rel = str(src.relative_to(ws))
+        except Exception:
+            rel = str(src)
+        # 复制 mineru 原始转换输出，便于备查
+        for item in tmpdir.iterdir():
+            dst = target / item.name
+            if item.is_dir():
+                shutil.copytree(item, dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, dst)
+        (target / "extracted_text.txt").write_text(text, encoding="utf-8")
+        (target / "meta.json").write_text(
+            json.dumps(
+                {
+                    "source_file": str(src),
+                    "relative_source_file": rel,
+                    "backend": backend,
+                    "device": device,
+                    "fingerprint": fp,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        _debug_log("mineru-local cached", str(target))
+    except Exception as exc:
+        _debug_log("mineru-local cache persist failed", repr(exc))
+
+
+def _import_legacy_mineru_converted(root: Path) -> None:
+    """
+    支持把旧缓存目录复制到新目录（一次性），用于平滑迁移。
+    通过环境变量指定：
+    XYB_MINERU_CONVERTED_IMPORT_DIR=/path/a:/path/b
+    """
+    spec = os.getenv("XYB_MINERU_CONVERTED_IMPORT_DIR", "").strip()
+    if not spec:
+        return
+    key = f"{root.resolve()}::{spec}"
+    if key in _MINERU_LEGACY_IMPORTED:
+        return
+    _MINERU_LEGACY_IMPORTED.add(key)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+    dst_files = root / "files"
+    try:
+        dst_files.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+    for raw in spec.split(":"):
+        src_root = Path(raw).expanduser()
+        if not src_root.exists():
+            continue
+        src_files = src_root / "files" if (src_root / "files").exists() else src_root
+        if not src_files.exists():
+            continue
+        try:
+            for item in src_files.iterdir():
+                dst = dst_files / item.name
+                if item.is_dir():
+                    shutil.copytree(item, dst, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, dst)
+            _debug_log("mineru-local imported legacy cache", str(src_root))
+        except Exception as exc:
+            _debug_log("mineru-local legacy import failed", str(src_root), repr(exc))
 
 
 def _read_image_text_paddle_api(path: Path) -> str:

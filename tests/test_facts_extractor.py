@@ -51,3 +51,33 @@ def test_extract_medical_facts_contains_diagnosis_fallback() -> None:
     dx = facts["diagnosis_facts"]
     assert dx
     assert "胰头不规则肿块" in (dx[0].get("finding") or "")
+
+
+def test_extract_medical_facts_rule_mode_linewise_binding_for_marker_panel() -> None:
+    text = """
+    报告日期：2025-7-10 0:00:00
+    癌胚抗原参考值：0-5.20 ng/ml
+    6.90ng/ml
+    甲胎蛋白参考值：0-10.00 ng/ml
+    2.79ng/ml
+    糖类抗原CA125参考值：0-35U/mL
+    7.12U/ml
+    糖类抗原19-9 参考值：0-27 U/mL
+    18.60U/ml
+    糖类抗原50参考值：0-25IU/ml
+    11.10IU/mL
+    糖类抗原72-4参考值：0-6.90 U/ml
+    47.40U/ml
+    糖类抗原242参考值：0-20 U/ml
+    9.86U/ml
+    """
+    facts = extract_medical_facts([("raw/IMG_3119.md", text)], mode="rule")
+    obs = facts["observation_facts"]
+    got = {o["item_code"]: float(o["value"]) for o in obs}
+    assert got["cea"] == 6.9
+    assert got["afp"] == 2.79
+    assert got["ca125"] == 7.12
+    assert got["ca19_9"] == 18.6
+    assert got["ca50"] == 11.1
+    assert got["ca72_4"] == 47.4
+    assert got["ca242"] == 9.86
