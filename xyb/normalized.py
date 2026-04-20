@@ -8,12 +8,12 @@ from pathlib import Path
 
 
 MARKER_REGEX: list[tuple[str, str, re.Pattern[str]]] = [
-    ("ca19_9", "CA19-9", re.compile(r"(?:ca\s*)?19\s*-?\s*9|糖链抗原\s*19\s*-?\s*9|119\s*-?\s*9", re.I)),
+    ("ca19_9", "CA19-9", re.compile(r"(?:ca\s*)?19\s*-?\s*9|糖[链类]抗原\s*19\s*-?\s*9|119\s*-?\s*9", re.I)),
     ("cea", "CEA", re.compile(r"\bcea\b|癌胚抗原", re.I)),
     ("afp", "AFP", re.compile(r"\bafp\b|甲胎蛋白", re.I)),
-    ("ca50", "CA50", re.compile(r"ca\s*50\b|糖链抗原\s*50|\b5O\b", re.I)),
-    ("ca72_4", "CA72-4", re.compile(r"ca\s*72\s*-?\s*4|糖链抗原\s*72\s*-?\s*4|a7\s*2\s*-?\s*4", re.I)),
-    ("ca125", "CA125", re.compile(r"ca\s*125\b|糖链抗原\s*125|4\s*125", re.I)),
+    ("ca50", "CA50", re.compile(r"ca\s*50\b|糖[链类]抗原\s*50|\b5O\b", re.I)),
+    ("ca72_4", "CA72-4", re.compile(r"ca\s*72\s*-?\s*4|糖[链类]抗原\s*72\s*-?\s*4|a7\s*2\s*-?\s*4", re.I)),
+    ("ca125", "CA125", re.compile(r"ca\s*125\b|糖[链类]抗原\s*(?:ca\s*)?125|4\s*125", re.I)),
 ]
 
 DATE_PATTERNS = [
@@ -98,6 +98,9 @@ def _score_value_candidate(text: str, vm: re.Match[str], marker_start: int, mark
 def _pick_best_value_near_marker(text: str, marker_start: int, marker_end: int) -> tuple[float, str] | None:
     best: tuple[int, float, str] | None = None
     for vm in VALUE_PATTERN.finditer(text):
+        # 跳过 marker 名称本体中的数字（如 CA125 中的 125）
+        if vm.start() < marker_end and vm.end() > marker_start:
+            continue
         cand = _score_value_candidate(text, vm, marker_start, marker_end)
         if not cand:
             continue
@@ -106,6 +109,25 @@ def _pick_best_value_near_marker(text: str, marker_start: int, marker_end: int) 
     if best is None:
         return None
     return best[1], best[2]
+
+
+def _split_panel_sections(text: str) -> list[tuple[str, str]]:
+    """
+    解析 [[PANEL:N]] 分段；无分段时返回单段。
+    """
+    marker_re = re.compile(r"\[\[PANEL:(\d+)\]\]")
+    matches = list(marker_re.finditer(text or ""))
+    if not matches:
+        return [("", text or "")]
+    out: list[tuple[str, str]] = []
+    for i, m in enumerate(matches):
+        pid = m.group(1)
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        block = (text[start:end] or "").strip()
+        if block:
+            out.append((pid, block))
+    return out or [("", text or "")]
 
 
 def extract_marker_records_from_nodes(nodes: list[dict]) -> list[dict]:
@@ -152,52 +174,54 @@ def extract_marker_records_from_texts(file_texts: list[tuple[str, str]]) -> list
     for source_file, text in file_texts:
         if not (text or "").strip():
             continue
-        date = _extract_date(text, source_file)
-        if not date:
-            continue
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        for i, line in enumerate(lines):
-            nxt = lines[i + 1] if i + 1 < len(lines) else ""
-            window = f"{line} {nxt}".replace(",", ".")
-            for key, marker_label, pat in MARKER_REGEX:
-                picked: tuple[float, str] | None = None
-                m_line = pat.search(line)
-                if m_line:
-                    line_norm = line.replace(",", ".")
-                    left = max(0, m_line.start() - 24)
-                    right = min(len(line_norm), m_line.end() + 96)
-                    near = line_norm[left:right]
-                    picked = _pick_best_value_near_marker(near, m_line.start() - left, m_line.end() - left)
-                if not picked:
-                    m_nxt = pat.search(nxt)
-                    if m_nxt:
-                        nxt_norm = nxt.replace(",", ".")
-                        left = max(0, m_nxt.start() - 24)
-                        right = min(len(nxt_norm), m_nxt.end() + 96)
-                        near = nxt_norm[left:right]
-                        picked = _pick_best_value_near_marker(near, m_nxt.start() - left, m_nxt.end() - left)
-                if not picked:
-                    m = pat.search(window)
-                    if not m:
+        for panel_id, section in _split_panel_sections(text):
+            source_file_panel = source_file if not panel_id else f"{source_file}#panel{panel_id}"
+            date = _extract_date(section, source_file)
+            if not date:
+                continue
+            lines = [ln.strip() for ln in section.splitlines() if ln.strip()]
+            for i, line in enumerate(lines):
+                nxt = lines[i + 1] if i + 1 < len(lines) else ""
+                window = f"{line} {nxt}".replace(",", ".")
+                for key, marker_label, pat in MARKER_REGEX:
+                    picked: tuple[float, str] | None = None
+                    m_line = pat.search(line)
+                    if m_line:
+                        line_norm = line.replace(",", ".")
+                        left = max(0, m_line.start() - 24)
+                        right = min(len(line_norm), m_line.end() + 96)
+                        near = line_norm[left:right]
+                        picked = _pick_best_value_near_marker(near, m_line.start() - left, m_line.end() - left)
+                    if not picked:
+                        m_nxt = pat.search(nxt)
+                        if m_nxt:
+                            nxt_norm = nxt.replace(",", ".")
+                            left = max(0, m_nxt.start() - 24)
+                            right = min(len(nxt_norm), m_nxt.end() + 96)
+                            near = nxt_norm[left:right]
+                            picked = _pick_best_value_near_marker(near, m_nxt.start() - left, m_nxt.end() - left)
+                    if not picked:
+                        m = pat.search(window)
+                        if not m:
+                            continue
+                        left = max(0, m.start() - 24)
+                        right = min(len(window), m.end() + 96)
+                        near = window[left:right]
+                        picked = _pick_best_value_near_marker(near, m.start() - left, m.end() - left)
+                    if not picked:
                         continue
-                    left = max(0, m.start() - 24)
-                    right = min(len(window), m.end() + 96)
-                    near = window[left:right]
-                    picked = _pick_best_value_near_marker(near, m.start() - left, m.end() - left)
-                if not picked:
-                    continue
-                rows.append(
-                    {
-                        "date": date,
-                        "marker_key": key,
-                        "marker_label": marker_label,
-                        "value": picked[0],
-                        "unit": picked[1],
-                        "source_file": source_file,
-                        "is_reference": False,
-                        "confidence": "INFERRED",
-                    }
-                )
+                    rows.append(
+                        {
+                            "date": date,
+                            "marker_key": key,
+                            "marker_label": marker_label,
+                            "value": picked[0],
+                            "unit": picked[1],
+                            "source_file": source_file_panel,
+                            "is_reference": False,
+                            "confidence": "INFERRED",
+                        }
+                    )
     dedup: dict[tuple[str, str, float, str, str], dict] = {}
     for r in rows:
         k = (r["date"], r["marker_key"], float(r["value"]), r["unit"], r["source_file"])

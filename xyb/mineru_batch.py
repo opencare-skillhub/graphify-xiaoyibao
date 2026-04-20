@@ -116,17 +116,48 @@ def _mineru_structured_text_from_json(raw: str) -> str:
 
     if not entries:
         return ""
-    entries.sort(key=lambda x: (x[0], x[1], x[2]))
+    by_page: dict[int, list[tuple[int, float, float, str]]] = {}
+    for e in entries:
+        by_page.setdefault(e[0], []).append(e)
+
+    panel_entries: list[tuple[int, int, float, float, str]] = []
+    has_multi_panel = False
+    for page, items in by_page.items():
+        xs = sorted(e[2] for e in items)
+        split_x: float | None = None
+        if len(xs) >= 8:
+            gaps = [(xs[i + 1] - xs[i], i) for i in range(len(xs) - 1)]
+            if gaps:
+                best_gap, idx = max(gaps, key=lambda x: x[0])
+                if best_gap >= 220:
+                    split_x = (xs[idx] + xs[idx + 1]) / 2.0
+                    has_multi_panel = True
+        for _p, y, x, text in items:
+            panel = 1 if split_x is None or x < split_x else 2
+            panel_entries.append((page, panel, y, x, text))
+
+    panel_entries.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
     y_tol = 14.0
     out_lines: list[str] = []
-    cur_page, cur_y, _x, first_text = entries[0]
+    cur_page, cur_panel, cur_y, _x, first_text = panel_entries[0]
     cur_parts = [first_text]
-    for page, y, _x, text in entries[1:]:
-        if page != cur_page or abs(y - cur_y) > y_tol:
+    if has_multi_panel:
+        out_lines.append(f"[[PANEL:{cur_panel}]]")
+    for page, panel, y, _x, text in panel_entries[1:]:
+        if page != cur_page or panel != cur_panel:
             line = " ".join(p for p in cur_parts if p).strip()
             if line:
                 out_lines.append(line)
-            cur_page, cur_y = page, y
+            cur_page, cur_panel, cur_y = page, panel, y
+            cur_parts = [text]
+            if has_multi_panel:
+                out_lines.append(f"[[PANEL:{cur_panel}]]")
+            continue
+        if abs(y - cur_y) > y_tol:
+            line = " ".join(p for p in cur_parts if p).strip()
+            if line:
+                out_lines.append(line)
+            cur_y = y
             cur_parts = [text]
         else:
             cur_parts.append(text)
